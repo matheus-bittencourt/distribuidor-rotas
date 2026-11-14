@@ -106,6 +106,7 @@ const MASKED = { cpf: "CPF", cnpj: "CNPJ", valor: "valores", telefone: "telefone
 
 async function init() {
   try { history.scrollRestoration = "manual"; } catch {}   // o app decide onde a tela começa (ex.: nas rotas)
+  if (matchMedia("(pointer: coarse)").matches) document.querySelector("#drop strong").textContent = "Escolha o arquivo";   // no celular não se arrasta
   state.cfg = await api("/api/config");
   const p = loadPrefs();
   $("depot").value = p.depot || state.cfg.default_depot;
@@ -571,11 +572,12 @@ function solveClick() {
   const b = $("solve"), n = state.sent.filter((s) => s.rota || s.links).length;
   if (state.result && n && !b.classList.contains("armed")) {
     b.classList.add("armed");
-    b.textContent = `Recalcular e zerar ${n} envio${n > 1 ? "s" : ""} marcado${n > 1 ? "s" : ""}?`;
+    b.textContent = `Recalcular e apagar as marcações de ${n} entregador${n > 1 ? "es" : ""}?`;
     announce(`${b.textContent} As rotas mudam e as marcações de copiado são apagadas. Clique de novo para confirmar, ou Esc para cancelar.`);
     return;
   }
   b.classList.remove("armed");
+  clearSent();
   solve();
 }
 
@@ -635,23 +637,57 @@ function markCopied(btn, label) {
   btn.classList.add("done");
   btn.replaceChildren(icon("check"), " ", label, ...(btn.dataset.who ? [el("span", { class: "sr" }, ` de ${btn.dataset.who}`)] : []));
 }
+function unmarkCopied(btn, label) {
+  btn.classList.remove("done");
+  btn.replaceChildren(icon("copy"), " ", label, el("span", { class: "sr" }, ` de ${btn.dataset.who}`));
+}
 function refreshSent(i) {
   const row = document.querySelector(`.driver[data-i="${i}"]`); if (!row) return;
   const st = state.sent[i], chip = row.querySelector(".chip.sent");
-  if (st.rota) markCopied(row.querySelector(".copy-rota"), "Rota copiada");
-  if (st.links) markCopied(row.querySelector(".copy-links"), "Links copiados");
+  st.rota ? markCopied(row.querySelector(".copy-rota"), "Rota copiada") : unmarkCopied(row.querySelector(".copy-rota"), "Copiar rota");
+  st.links ? markCopied(row.querySelector(".copy-links"), "Links copiados") : unmarkCopied(row.querySelector(".copy-links"), "Copiar links");
   chip.hidden = !(st.rota && st.links);
 }
+
+// ---- marcações de "copiado" sobrevivem a um recarregamento (só nesta aba; somem ao apagar ou recalcular)
+const SENT_KEY = "distribuidor.copiados.v1";
+const resultSig = (r) => [state.job, r.deliveries, r.total_min, ...r.drivers.map((d) => d.stops[0]?.id ?? "")].join("|");
+function saveSent() { try { sessionStorage.setItem(SENT_KEY, JSON.stringify({ sig: state.sig, sent: state.sent })); } catch {} }
+function loadSent(r) {
+  try {
+    const s = JSON.parse(sessionStorage.getItem(SENT_KEY));
+    if (s && s.sig === state.sig && s.sent.length === r.drivers.length) return s.sent;
+  } catch {}
+  return null;
+}
+function clearSent() { try { sessionStorage.removeItem(SENT_KEY); } catch {} }
+
+const KIND = { rota: ["Rota", "copiada"], links: ["Links", "copiados"] };
+function showLastCopy(i, kind) {
+  const who = state.result.drivers[i].label, [what, done] = KIND[kind];
+  state.lastCopy = { i, kind };
+  $("sent-last").replaceChildren(icon("check"), ` ${what} de ${who} ${done}. Cole na conversa de ${who}. `,
+    el("button", { class: "link", onclick: undoLastCopy }, "Desfazer"));
+}
+function undoLastCopy() {
+  const lc = state.lastCopy; if (!lc) return;
+  state.sent[lc.i][lc.kind] = false; state.lastCopy = null;
+  refreshSent(lc.i); updateSendbar(); saveSent();
+  $("sent-last").textContent = `Marcação desfeita: ${KIND[lc.kind][0].toLowerCase()} de ${state.result.drivers[lc.i].label} volta para a fila.`;
+  announce($("sent-last").textContent);
+}
 async function copyKind(i, kind) {
-  if (await copyText(state.texts[i][kind], `${kind === "rota" ? "Rota" : "Links"} de ${state.result.drivers[i].label} copiad${kind === "rota" ? "a" : "os"}`)) {
-    state.sent[i][kind] = true; refreshSent(i); updateSendbar();
+  const [what, done] = KIND[kind];
+  if (await copyText(state.texts[i][kind], `${what} de ${state.result.drivers[i].label} ${done}`)) {
+    state.sent[i][kind] = true; refreshSent(i); updateSendbar(); saveSent(); showLastCopy(i, kind);
   }
 }
 async function copyAll(kind, btn, doneLabel) {
   $("bulk").open = false;
   if (!(await copyText(state.texts.map((t) => t[kind]).join(SEP), doneLabel))) return;
   state.sent.forEach((st, i) => { st[kind] = true; refreshSent(i); });
-  markCopied(btn, doneLabel); updateSendbar();
+  markCopied(btn, doneLabel); updateSendbar(); saveSent();
+  state.lastCopy = null; $("sent-last").textContent = `${doneLabel}: ${KIND[kind][0].toLowerCase()} de todos os entregadores numa mensagem só.`;
 }
 
 // ---- impressão: lista completa, sem blocos de 10
@@ -734,8 +770,9 @@ function renderResult(r) {
     + (byStreet ? "Linhas seguem as ruas." : "Linhas retas, não as ruas.");
   $("csv-all").href = `/api/jobs/${state.job}/export.csv`;
   state.texts = dr.map((d) => ({ rota: routeText(d, r.depot.address), links: linksText(d) }));
-  state.sent = dr.map(() => ({ rota: false, links: false }));
-  state.result = r;
+  state.result = r; state.sig = resultSig(r); state.lastCopy = null;
+  const resumed = loadSent(r);
+  state.sent = resumed || dr.map(() => ({ rota: false, links: false }));
   for (const [id, label] of [["copy-all-routes", "Copiar todas as rotas"], ["copy-all-links", "Copiar todos os links"]]) {
     const b = $(id); b.classList.remove("done"); b.replaceChildren(icon("copy"), " ", label);
   }
@@ -766,7 +803,7 @@ function renderResult(r) {
     const zoneTxt = d.zones[0] ? `${d.zones[0].name}${d.zones.length > 1 ? ` +${d.zones.length - 1}` : ""}` : "sem paradas";
     const head = el("div", { class: "dhead" },
       el("span", { class: "swatch", style: `background:${color(i)}` }, String(i + 1)),
-      el("div", { class: "dname" }, el("h3", { class: "dtitle" }, toggle), el("span", { class: "zone" }, zoneTxt, el("span", { class: "chip sent", hidden: "" }, icon("check"), " enviado"))),
+      el("div", { class: "dname" }, el("h3", { class: "dtitle" }, toggle), el("span", { class: "zone" }, zoneTxt, el("span", { class: "chip sent", hidden: "" }, icon("check"), " copiado"))),
       el("div", { class: "dnums" }, el("span", {}, `${d.count} paradas · ${d.deliveries} entregas`), el("span", {}, fmtMin(d.total_min)), el("span", {}, `${Math.round(d.km)} km`)),
       el("div", { class: "bar", role: "img", "aria-label": `${d.label}: ${CRIT[by]} em relação à maior rota, ${Math.round((metric(d) / maxM) * 100)}%`, style: `--bar:${color(i)}` }, el("i", { style: `width:${(metric(d) / maxM) * 100}%` })),
       el("div", { class: "dact" }, copyRoute, copyLinks, more),
@@ -776,6 +813,9 @@ function renderResult(r) {
     head.addEventListener("focusin", () => highlight(i)); head.addEventListener("focusout", () => highlight(null));
     box.append(row);
   });
+  state.sent.forEach((_, i) => refreshSent(i));
+  const resumedN = state.sent.filter((s) => s.rota || s.links).length;
+  $("sent-last").textContent = resumedN ? `Retomando de onde parou: ${resumedN} entregador${resumedN > 1 ? "es" : ""} já com mensagens copiadas.` : "";
   updateSendbar(); updatePlan();   // "Calcular rotas" vira "Recalcular rotas"
   // espera o layout assentar e a restauração de rolagem do navegador (no recarregamento o painel acabou de aparecer)
   setTimeout(() => $("s3").scrollIntoView({ behavior: "smooth", block: "start" }), 300);
@@ -791,18 +831,27 @@ function nextMessage() {
 }
 function updateSendbar() {
   const n = state.sent.length, done = state.sent.filter((s) => s.rota && s.links).length, nx = nextMessage();
-  $("sent-count").textContent = done === n ? `Todos os ${n} entregadores receberam as duas mensagens` : `${done} de ${n} entregadores com rota e links enviados`;
-  $("sent-meter").style.width = `${n ? (done / n) * 100 : 0}%`;
+  const msgs = state.sent.reduce((a, s) => a + s.rota + s.links, 0);
+  $("sent-count").textContent = done === n ? `Rota e links de todos os ${n} entregadores copiados` : `${done} de ${n} entregadores com rota e links copiados`;
+  $("sent-meter").style.width = `${n ? (msgs / (2 * n)) * 100 : 0}%`;   // avança a cada mensagem, não só a cada entregador
   const btn = $("copy-next");
   btn.disabled = !nx;
   $("copy-next-label").textContent = nx
     ? `Copiar ${nx.kind === "rota" ? "rota" : "links"} de ${state.result.drivers[nx.i].label}`
     : "Tudo copiado";
 }
+// Clique duplo não pode copiar os links por cima da rota antes de ela ser colada.
 async function copyNext() {
-  const nx = nextMessage(); if (!nx) return;
+  const nx = nextMessage(); if (!nx || Date.now() - (state.lastNextAt || 0) < 700) return;
+  state.lastNextAt = Date.now();
   await copyKind(nx.i, nx.kind);
 }
+// Atalho: tecla C copia a próxima mensagem (fora de campos de texto).
+document.addEventListener("keydown", (e) => {
+  if (e.key.toLowerCase() !== "c" || e.ctrlKey || e.metaKey || e.altKey || !state.result || $("s3").hidden) return;
+  const t = e.target; if (t.closest && t.closest("input, textarea, select, [contenteditable], dialog")) return;
+  e.preventDefault(); copyNext();
+});
 
 function fillBody(body, d, mostApprox) {
   const links = el("div", { class: "links" }, ...d.links.map((l, k) =>
@@ -934,6 +983,7 @@ async function wipe() {
   await api(`/api/jobs/${state.job}`, { method: "DELETE" }).catch(() => {});
   state.job = null; state.okCount = 0; state.result = null; state.texts = []; state.sent = [];
   try { sessionStorage.removeItem(JOB_KEY); } catch {}
+  clearSent();
   state.routes.forEach((o) => o.layers.forEach((l) => l.remove())); state.routes = [];
   resetPanels(); show("wipe", false);
   setStatus("s1status", "Pronto: lista, nomes, endereços e rotas foram apagados da memória. O elenco salvo neste navegador não foi tocado.", "ok");
