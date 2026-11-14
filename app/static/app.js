@@ -57,20 +57,24 @@ function setStep(n) {
     a.setAttribute("aria-current", k === n ? "step" : "false");
     a.setAttribute("aria-disabled", k > n ? "true" : "false"); a.tabIndex = k > n ? -1 : 0;
   });
-  document.querySelectorAll("#todo li").forEach((li) => { const k = +li.dataset.step; li.className = k < n ? "done" : k === n ? "current" : ""; });
 }
 function flash(btn, text, ms = 1800) {
   if (!btn._orig) btn._orig = [...btn.childNodes].map((n) => n.cloneNode(true));
   btn.textContent = text; clearTimeout(btn._t);
   btn._t = setTimeout(() => btn.replaceChildren(...btn._orig.map((n) => n.cloneNode(true))), ms);
 }
-// Confirmação em duas etapas, no próprio botão (sem alert/confirm nativos).
-function twoStep(btn, armedText, action) {
+// Confirmação em duas etapas, no próprio botão (sem alert/confirm nativos). Sem prazo: fica armado até
+// a pessoa confirmar, sair do botão ou apertar Esc; o estado é anunciado para leitores de tela.
+function twoStep(btn, armedText, action, armedHint = "Clique de novo para confirmar, ou Esc para cancelar.") {
+  const disarm = () => { if (!btn.classList.contains("armed")) return; btn.classList.remove("armed"); btn.textContent = btn.dataset.label; };
   btn.addEventListener("click", () => {
-    if (btn.classList.contains("armed")) { clearTimeout(btn._arm); btn.classList.remove("armed"); btn.textContent = btn.dataset.label; return action(); }
+    if (btn.classList.contains("armed")) { disarm(); return action(); }
     btn.dataset.label = btn.textContent; btn.textContent = armedText; btn.classList.add("armed");
-    btn._arm = setTimeout(() => { btn.classList.remove("armed"); btn.textContent = btn.dataset.label; }, 4000);
+    announce(`${armedText}. ${armedHint}`);
   });
+  btn.addEventListener("blur", () => setTimeout(disarm, 150));
+  btn.addEventListener("keydown", (e) => { if (e.key === "Escape") disarm(); });
+  btn._disarm = disarm;
 }
 
 // ------------------------------------------------------------------ preferências do operador (só neste navegador)
@@ -101,6 +105,7 @@ const METHOD = {
 const MASKED = { cpf: "CPF", cnpj: "CNPJ", valor: "valores", telefone: "telefones", email: "e-mails", data: "datas", numero_longo: "números longos" };
 
 async function init() {
+  try { history.scrollRestoration = "manual"; } catch {}   // o app decide onde a tela começa (ex.: nas rotas)
   state.cfg = await api("/api/config");
   const p = loadPrefs();
   $("depot").value = p.depot || state.cfg.default_depot;
@@ -114,8 +119,9 @@ async function init() {
   $("balance").value = fresh ? p.balance ?? 1 : 1;
   $("zone").value = Math.min(fresh ? p.zone ?? state.cfg.zone_weight : state.cfg.zone_weight, state.cfg.zone_weight_max ?? 0.15);
   state.fromPrefs = fresh && (p.by != null || p.balance != null);
-  const ai = state.cfg.llm.startsWith("nenhuma") ? "sem IA: regras simples, menos precisas" : state.cfg.llm;
-  $("s1ai").textContent = `PDF e texto livre: ${ai}.`;
+  $("s1ai").textContent = state.cfg.llm.startsWith("nenhuma")
+    ? "PDF e texto livre são lidos por regras simples, sem IA: confira os nomes."
+    : `PDF e texto livre são lidos com ${state.cfg.llm}.`;
 
   ["balance", "zone", "balance-by"].forEach((id) => $(id).addEventListener("input", () => { state.fromPrefs = false; }));
   ["balance", "zone", "balance-by", "drivers", "depot", "tolerance", "km-tol"].forEach((id) => $(id).addEventListener("input", updatePlan));
@@ -127,11 +133,16 @@ async function init() {
   $("me").addEventListener("click", addMe);
   $("forget").addEventListener("click", forgetPrefs);
   $("map-go").addEventListener("click", sendMapping);
-  $("solve").addEventListener("click", solve);
+  $("solve").addEventListener("click", solveClick);
+  $("solve").addEventListener("blur", () => setTimeout(disarmSolve, 150));
+  $("solve").addEventListener("keydown", (e) => { if (e.key === "Escape") disarmSolve(); });
   $("copy-all-routes").addEventListener("click", (e) => copyAll("rota", e.currentTarget, "Todas as rotas copiadas"));
   $("copy-all-links").addEventListener("click", (e) => copyAll("links", e.currentTarget, "Todos os links copiados"));
-  $("print-all").addEventListener("click", () => printSheets(state.result.drivers, "Rotas do dia"));
+  $("print-all").addEventListener("click", () => { $("bulk").open = false; printSheets(state.result.drivers, "Rotas do dia"); });
+  $("copy-next").addEventListener("click", copyNext);
   twoStep($("wipe"), "Confirmar: apagar tudo", wipe);
+  twoStep($("wipe-end"), "Confirmar: apagar tudo", wipe);
+  initPresets();
   $("regeo").addEventListener("click", async () => {
     $("regeo").disabled = true;
     try { await post(`/api/jobs/${state.job}/regeocode`, {}); await refresh(); } finally { $("regeo").disabled = false; }
@@ -159,12 +170,27 @@ const SAMPLE_CSV = [
   "Rua Padre Chagas, 300 apto 402, Moinhos de Vento;Cliente Exemplo 4;BR000000004BR",
 ].join("\r\n");
 
+// Onde fica o tutorial: em tela larga e sem resultado, é o conteúdo da coluna da direita (ao lado da área
+// de envio); no celular, ou com rotas na tela, fica recolhido no topo e abre pelo botão "Como usar".
+const WIDE = matchMedia("(min-width: 1180px)");
+function placeGuide() {
+  const g = $("guide"); if (!g || !g.dataset.ready) return;
+  const home = WIDE.matches && !document.body.classList.contains("has-result");
+  const where = home ? $("guide-home") : $("guide-top");
+  if (g.parentElement !== where.parentElement || g.previousElementSibling !== where) where.after(g);
+  g.classList.toggle("in-home", home);
+  const closed = (() => { try { return localStorage.getItem(GUIDE_KEY) === "fechado"; } catch { return false; } })();
+  state.placing = true; g.open = home ? !closed : false; state.placing = false;
+}
+
 function guideInit() {
   const g = $("guide");
-  const seen = (() => { try { return localStorage.getItem(GUIDE_KEY); } catch { return null; } })();
-  g.open = seen !== "fechado" && !state.job;
-  g.addEventListener("toggle", () => { try { localStorage.setItem(GUIDE_KEY, g.open ? "aberto" : "fechado"); } catch {} });
-  $("guide-open").addEventListener("click", () => { g.open = true; g.scrollIntoView({ behavior: "smooth", block: "start" }); g.querySelector("summary").focus({ preventScroll: true }); });
+  g.dataset.ready = "1";
+  g.addEventListener("toggle", () => {
+    if (!state.placing && g.classList.contains("in-home")) { try { localStorage.setItem(GUIDE_KEY, g.open ? "aberto" : "fechado"); } catch {} }
+  });
+  WIDE.addEventListener("change", placeGuide);
+  placeGuide();
   g.querySelectorAll("[data-go]").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); $(a.dataset.go).scrollIntoView({ behavior: "smooth", block: "start" }); }));
   $("guide-depot").textContent = `o ponto padrão (${state.cfg.default_depot.split(",").slice(0, 2).join(",")})`;
   const local = ["local", "cache", "fake"].includes(state.cfg.geocoder);
@@ -301,6 +327,7 @@ function generateList() {
 
 // ------------------------------------------------------------------ etapa 1: arquivo
 function resetPanels() {
+  state.result = null; state.sent = []; document.body.classList.remove("has-result"); placeGuide();
   ["review-card", "s2", "s3", "map-card"].forEach((i) => show(i, false));
   show("s1report", false); $("undo").hidden = true; $("empty-busy").hidden = true; setStatus("s2status", ""); setStep(1);
 }
@@ -472,6 +499,30 @@ function zoneNow(z) {
     : "peso máximo das zonas: ainda assim, a carga manda.";
   return `Agora (${pct(z)}): ${now}`;
 }
+// ---- predefinições da divisão: duas escolhas com nome cobrem o uso diário; "Personalizado" abre os controles
+const PRESETS = {
+  carga: { label: "Carga parecida", by: "km", balance: 1, kmtol: "15", zone: 0.1 },
+  km: { label: "Menos km no total", by: "km", balance: 0.3, kmtol: "30", zone: 0.1 },
+};
+function currentPreset() {
+  for (const [k, p] of Object.entries(PRESETS)) {
+    if ($("balance-by").value === p.by && Math.abs(parseFloat($("balance").value) - p.balance) < 1e-6
+      && String($("km-tol").value) === p.kmtol && Math.abs(parseFloat($("zone").value) - p.zone) < 1e-6) return k;
+  }
+  return "custom";
+}
+function applyPreset(name) {
+  const p = PRESETS[name];
+  if (p) { $("balance-by").value = p.by; $("balance").value = p.balance; $("km-tol").value = p.kmtol; $("zone").value = p.zone; }
+  $("custom").hidden = name !== "custom";
+  document.querySelectorAll('input[name="preset"]').forEach((r) => (r.checked = r.value === name));
+  updatePlan();
+}
+function initPresets() {
+  document.querySelectorAll('input[name="preset"]').forEach((r) => r.addEventListener("change", () => { state.fromPrefs = false; applyPreset(r.value); }));
+  applyPreset(currentPreset());
+}
+
 function updatePlan() {
   const d = parseDrivers(), home = d.filter((x) => x.start.address || x.start.lat != null).length;
   const by = $("balance-by").value, b = parseFloat($("balance").value), z = parseFloat($("zone").value);
@@ -483,13 +534,17 @@ function updatePlan() {
   const tol = toleranceMin(), kt = kmTolerance();
   $("km-tol-help").textContent = kt === null
     ? "Vazio: o app tenta deixar os km parecidos entre os entregadores. Com um valor (ex.: 30), entregas e tempo viram o alvo e o km só não pode passar de ±30% da média: o total de km cai, mas os km deixam de ser parecidos."
-    : `Entregas e tempo são o alvo; cada rota pode ter km até ${Math.round(kt * 100)}% acima ou abaixo da média sem penalidade.`;  $("adv-summary").textContent = `igualar ${BY_LABEL[by]} · ${pct(b)} · zonas ${pct(z)}${kt !== null ? ` · km ±${Math.round(kt * 100)}%` : ""} · tolerância ${tol} min${state.fromPrefs ? " · da última vez" : ""}`;
+    : `Entregas e tempo são o alvo; cada rota pode ter km até ${Math.round(kt * 100)}% acima ou abaixo da média sem penalidade.`;
+  const preset = PRESETS[document.querySelector('input[name="preset"]:checked')?.value];
+  const how = preset ? preset.label : `igualar ${BY_LABEL[by]} · ${pct(b)} · zonas ${pct(z)}${kt !== null ? ` · km ±${Math.round(kt * 100)}%` : ""}`;
+  $("adv-summary").textContent = `${how} · folga ${tol} min${state.fromPrefs ? " · da última vez" : ""}`;
   $("drivers-count").textContent = d.length ? `${d.length} entregador${d.length > 1 ? "es" : ""}${home ? ` · ${home} saem de casa` : ""}` : "";
   const stops = state.okCount ? `${state.okCount} entregas` : "entregas";
   $("plan").textContent = !state.okCount ? "Nenhuma entrega localizada ainda: resolva os endereços para revisar."
     : !d.length ? "Informe pelo menos um entregador."
-    : `${stops} para ${d.length} entregador${d.length > 1 ? "es" : ""}, igualando ${BY_LABEL[by]} (${pct(b)}), com ${tol} min de tolerância por entrega.`;
+    : `${stops} para ${d.length} entregador${d.length > 1 ? "es" : ""} · ${preset ? preset.label.toLowerCase() : `igualando ${BY_LABEL[by]} (${pct(b)})`} · ${tol} min de folga por entrega.`;
   $("solve").disabled = !d.length || !state.okCount || $("solve").dataset.busy === "1";
+  if (!$("solve").classList.contains("armed")) $("solve").textContent = state.result ? "Recalcular rotas" : "Calcular rotas";
 }
 function addMe() {
   if (!navigator.geolocation) return setStatus("s2status", "Este navegador não oferece localização.", "err");
@@ -510,11 +565,26 @@ async function awaitResult() {
   renderResult(await api(`/api/jobs/${state.job}/result`));
 }
 
+// Recalcular troca as rotas: as marcações de "copiado" deixam de valer. Se já houver envios, pede confirmação.
+function disarmSolve() { const b = $("solve"); if (b.classList.contains("armed")) { b.classList.remove("armed"); updatePlan(); } }
+function solveClick() {
+  const b = $("solve"), n = state.sent.filter((s) => s.rota || s.links).length;
+  if (state.result && n && !b.classList.contains("armed")) {
+    b.classList.add("armed");
+    b.textContent = `Recalcular e zerar ${n} envio${n > 1 ? "s" : ""} marcado${n > 1 ? "s" : ""}?`;
+    announce(`${b.textContent} As rotas mudam e as marcações de copiado são apagadas. Clique de novo para confirmar, ou Esc para cancelar.`);
+    return;
+  }
+  b.classList.remove("armed");
+  solve();
+}
+
 async function solve() {
   const drivers = parseDrivers();
   if (!drivers.length) return setStatus("s2status", "Informe pelo menos um entregador.", "err");
   savePrefs(); setStep(2);
   const btn = $("solve"); btn.dataset.busy = "1"; btn.disabled = true; show("s3", false);
+  document.body.classList.remove("has-result"); placeGuide();
   const t0 = Date.now(), budget = (state.cfg.solver_seconds || 30) + 15;
   const tick = () => {
     const msg = `Calculando as rotas… ${Math.round((Date.now() - t0) / 1000)} s (costuma levar até ~${budget} s)`;
@@ -553,15 +623,18 @@ function linksText(d) {
 }
 
 // ---- cópia com estado persistente: o ✓ fica até recalcular, para o operador saber o que já mandou
-async function copyText(text) {
-  try { await navigator.clipboard.writeText(text); announce("Texto copiado"); return true; }
+async function copyText(text, what = "Texto copiado") {
+  try { await navigator.clipboard.writeText(text); announce(what); return true; }
   catch { showCopyFallback(text); return false; }
 }
 function showCopyFallback(text) {
   const dlg = $("copy-fallback"), ta = $("copy-fallback-text");
   ta.value = text; dlg.showModal(); ta.focus(); ta.select();
 }
-function markCopied(btn, label) { btn.classList.add("done"); btn.replaceChildren(icon("check"), " ", label); }
+function markCopied(btn, label) {
+  btn.classList.add("done");
+  btn.replaceChildren(icon("check"), " ", label, ...(btn.dataset.who ? [el("span", { class: "sr" }, ` de ${btn.dataset.who}`)] : []));
+}
 function refreshSent(i) {
   const row = document.querySelector(`.driver[data-i="${i}"]`); if (!row) return;
   const st = state.sent[i], chip = row.querySelector(".chip.sent");
@@ -570,12 +643,15 @@ function refreshSent(i) {
   chip.hidden = !(st.rota && st.links);
 }
 async function copyKind(i, kind) {
-  if (await copyText(state.texts[i][kind])) { state.sent[i][kind] = true; refreshSent(i); }
+  if (await copyText(state.texts[i][kind], `${kind === "rota" ? "Rota" : "Links"} de ${state.result.drivers[i].label} copiad${kind === "rota" ? "a" : "os"}`)) {
+    state.sent[i][kind] = true; refreshSent(i); updateSendbar();
+  }
 }
 async function copyAll(kind, btn, doneLabel) {
-  if (!(await copyText(state.texts.map((t) => t[kind]).join(SEP)))) return;
+  $("bulk").open = false;
+  if (!(await copyText(state.texts.map((t) => t[kind]).join(SEP), doneLabel))) return;
   state.sent.forEach((st, i) => { st[kind] = true; refreshSent(i); });
-  markCopied(btn, doneLabel);
+  markCopied(btn, doneLabel); updateSendbar();
 }
 
 // ---- impressão: lista completa, sem blocos de 10
@@ -623,7 +699,10 @@ function renderResult(r) {
   // Com tolerância de km, o km é avaliado contra a faixa (±t da média permite até 2t/(1+t) entre menor e maior).
   const kt = r.km_tolerance, kmAllowed = kt ? Math.round(((2 * kt) / (1 + kt)) * 100) : null;
   const worst = Math.max(kt ? 0 : spreads.km, spreads.entregas, spreads.tempo);
+  const kmOut = kt != null && spreads.km > kmAllowed;
+  // A cor segue o pior critério: nada de verde ao lado de "fora da faixa".
   const verdictWord = worst <= 15 ? "bem equilibradas" : worst <= 30 ? "razoavelmente equilibradas" : "bem desiguais";
+  const verdictKind = worst > 30 || kmOut ? "warn" : "ok";
 
   const notes = [
     `Tempos e km ${estimated ? "estimados em linha reta (sem as ruas)" : "calculados pelas ruas"}`,
@@ -632,23 +711,24 @@ function renderResult(r) {
   ];
   const multi = all.filter((s) => s.n_deliveries > 1).length;
   if (multi) notes.push(`${multi} paradas reúnem várias entregas no mesmo endereço (casa ou condomínio)`);
+  if (mostApprox) notes.push(`${approxN} de ${all.length} posições são aproximadas (só a rua foi localizada; a ordem das paradas continua valendo)`);
+  const fmtRange = (a, f) => (Math.min(...a) === Math.max(...a) ? f(a[0]) : `${f(Math.min(...a))}–${f(Math.max(...a))}`);
+  const reviewBtn = el("button", { class: "link", onclick: () => $("review-card").scrollIntoView({ behavior: "smooth", block: "start" }) }, "Revisar endereços");
   $("summary").replaceChildren(
-    el("p", { class: "headline" }, `${r.deliveries} entregas em ${total} paradas · ${n} rota${n > 1 ? "s" : ""}`),
+    el("p", { class: "headline" }, `${n} rota${n > 1 ? "s" : ""} pront${n > 1 ? "as" : "a"} · ${r.deliveries} entregas em ${total} paradas`),
     el("dl", { class: "ranges" },
-      el("div", {}, el("dt", {}, "Paradas por entregador"), el("dd", {}, range(counts))),
-      el("div", {}, el("dt", {}, "Entregas por entregador"), el("dd", {}, range(dr.map((d) => d.deliveries)))),
-      el("div", {}, el("dt", {}, "Tempo por rota"), el("dd", {}, Math.min(...times) === Math.max(...times) ? fmtMin(times[0]) : `${fmtMin(Math.min(...times))}–${fmtMin(Math.max(...times))}`)),
-      el("div", {}, el("dt", {}, `Km por entregador (soma ${Math.round(kms.reduce((a, b) => a + b, 0))})`), el("dd", {}, `${Math.round(Math.min(...kms))}–${Math.round(Math.max(...kms))} km`)),
+      el("div", {}, el("dt", {}, "Entregas"), el("dd", {}, range(dr.map((d) => d.deliveries)))),
+      el("div", {}, el("dt", {}, "Tempo"), el("dd", {}, fmtRange(times, fmtMin))),
+      el("div", {}, el("dt", {}, "Km"), el("dd", {}, `${fmtRange(kms, Math.round)} km`)),
+      el("div", {}, el("dt", {}, "Paradas"), el("dd", {}, range(counts))),
     ),
-    ...(n > 1 ? [el("p", { class: `verdict ${worst <= 30 ? "ok" : "warn"}` },
-      `Rotas ${verdictWord}. Diferença entre a menor e a maior: km ${spreads.km}% · entregas ${spreads.entregas}% · tempo ${spreads.tempo}%.` +
-      (kt ? ` O km tem tolerância de ±${Math.round(kt * 100)}%: ${spreads.km <= kmAllowed ? "dentro" : "fora"} da faixa (até ${kmAllowed}%).` : ""))] : []),
-    el("p", { class: "note" }, notes.join(" · ") + "."),
-    ...(mostApprox ? [el("div", { class: "status warn" }, icon("alert"),
-      el("span", {}, `${approxN} de ${all.length} posições são aproximadas: só a rua foi localizada, então o ponto pode estar a algumas quadras. A ordem das paradas continua valendo.`))] : []),
-    ...(r.unrouted.length ? [el("div", { class: "status warn" }, icon("alert"),
-      el("span", {}, `${r.unrouted.length} entrega${r.unrouted.length > 1 ? "s ficaram" : " ficou"} de fora. Resolva em “Endereços para revisar” e calcule de novo.`))] : []),
+    ...(n > 1 ? [el("p", { class: `verdict ${verdictKind}` }, verdictKind === "ok" ? icon("check") : icon("alert"), " ",
+      `Rotas ${verdictWord}` + (kmOut ? `, mas o km passou da margem de ±${Math.round(kt * 100)}%` : "") +
+      `. Diferença entre a menor e a maior: entregas ${spreads.entregas}% · tempo ${spreads.tempo}% · km ${spreads.km}%.`)] : []),
+    ...(r.unrouted.length ? [el("p", { class: "alert-line" }, icon("alert"), " ",
+      `${r.unrouted.length} entrega${r.unrouted.length > 1 ? "s ficaram" : " ficou"} de fora destas rotas. `, reviewBtn)] : []),
   );
+  $("calc-notes").textContent = notes.join(" · ") + ".";
   const byStreet = r.drivers.some((d) => d.path);
   $("legend").textContent = "Cada cor é uma rota e o número marca a primeira parada dela. Círculo grande = partida; pino azul = chegada. "
     + (byStreet ? "Linhas seguem as ruas." : "Linhas retas, não as ruas.");
@@ -659,19 +739,22 @@ function renderResult(r) {
   for (const [id, label] of [["copy-all-routes", "Copiar todas as rotas"], ["copy-all-links", "Copiar todos os links"]]) {
     const b = $(id); b.classList.remove("done"); b.replaceChildren(icon("copy"), " ", label);
   }
+  document.body.classList.add("has-result"); placeGuide();
   drawMap(r);
+  renderLegend(r);
 
   const maxM = Math.max(...ms, 1), box = $("drivers-out"); box.replaceChildren();
   dr.forEach((d, i) => {
     const body = el("div", { class: "body", hidden: "", id: `body-${i}` });
-    const toggle = el("button", { class: "dtoggle", "aria-expanded": "false", "aria-controls": `body-${i}` }, el("strong", {}, d.label), icon("chevron"));
+    const toggle = el("button", { class: "dtoggle", "aria-expanded": "false", "aria-controls": `body-${i}` }, d.label, icon("chevron"));
     toggle.addEventListener("click", () => {
       const open = toggle.getAttribute("aria-expanded") === "true";
       if (!open && !body.childElementCount) fillBody(body, d, mostApprox);
       toggle.setAttribute("aria-expanded", String(!open)); body.hidden = open;
     });
-    const copyRoute = el("button", { class: "ghost copy-rota", "aria-label": `Copiar a mensagem da rota de ${d.label} para o WhatsApp` }, icon("copy"), " Copiar rota");
-    const copyLinks = el("button", { class: "ghost copy-links", "aria-label": `Copiar a mensagem com os links do Maps de ${d.label} para o WhatsApp` }, icon("copy"), " Copiar links");
+    // O nome acessível é o texto visível + o entregador (oculto): o estado "copiada" fica audível.
+    const copyRoute = el("button", { class: "ghost copy-rota", "data-who": d.label }, icon("copy"), " Copiar rota", el("span", { class: "sr" }, ` de ${d.label}`));
+    const copyLinks = el("button", { class: "ghost copy-links", "data-who": d.label }, icon("copy"), " Copiar links", el("span", { class: "sr" }, ` de ${d.label}`));
     copyRoute.addEventListener("click", () => copyKind(i, "rota"));
     copyLinks.addEventListener("click", () => copyKind(i, "links"));
     const more = el("details", { class: "more" },
@@ -683,7 +766,7 @@ function renderResult(r) {
     const zoneTxt = d.zones[0] ? `${d.zones[0].name}${d.zones.length > 1 ? ` +${d.zones.length - 1}` : ""}` : "sem paradas";
     const head = el("div", { class: "dhead" },
       el("span", { class: "swatch", style: `background:${color(i)}` }, String(i + 1)),
-      el("div", { class: "dname" }, toggle, el("span", { class: "zone" }, zoneTxt, el("span", { class: "chip sent", hidden: "" }, "rota e links copiados"))),
+      el("div", { class: "dname" }, el("h3", { class: "dtitle" }, toggle), el("span", { class: "zone" }, zoneTxt, el("span", { class: "chip sent", hidden: "" }, icon("check"), " enviado"))),
       el("div", { class: "dnums" }, el("span", {}, `${d.count} paradas · ${d.deliveries} entregas`), el("span", {}, fmtMin(d.total_min)), el("span", {}, `${Math.round(d.km)} km`)),
       el("div", { class: "bar", role: "img", "aria-label": `${d.label}: ${CRIT[by]} em relação à maior rota, ${Math.round((metric(d) / maxM) * 100)}%`, style: `--bar:${color(i)}` }, el("i", { style: `width:${(metric(d) / maxM) * 100}%` })),
       el("div", { class: "dact" }, copyRoute, copyLinks, more),
@@ -693,7 +776,32 @@ function renderResult(r) {
     head.addEventListener("focusin", () => highlight(i)); head.addEventListener("focusout", () => highlight(null));
     box.append(row);
   });
-  $("s3").scrollIntoView({ behavior: "smooth", block: "start" });
+  updateSendbar(); updatePlan();   // "Calcular rotas" vira "Recalcular rotas"
+  // espera o layout assentar e a restauração de rolagem do navegador (no recarregamento o painel acabou de aparecer)
+  setTimeout(() => $("s3").scrollIntoView({ behavior: "smooth", block: "start" }), 300);
+}
+
+// ---- fila de envio: quantos já receberam as duas mensagens e qual é a próxima
+function nextMessage() {
+  for (let i = 0; i < state.sent.length; i++) {
+    if (!state.sent[i].rota) return { i, kind: "rota" };
+    if (!state.sent[i].links) return { i, kind: "links" };
+  }
+  return null;
+}
+function updateSendbar() {
+  const n = state.sent.length, done = state.sent.filter((s) => s.rota && s.links).length, nx = nextMessage();
+  $("sent-count").textContent = done === n ? `Todos os ${n} entregadores receberam as duas mensagens` : `${done} de ${n} entregadores com rota e links enviados`;
+  $("sent-meter").style.width = `${n ? (done / n) * 100 : 0}%`;
+  const btn = $("copy-next");
+  btn.disabled = !nx;
+  $("copy-next-label").textContent = nx
+    ? `Copiar ${nx.kind === "rota" ? "rota" : "links"} de ${state.result.drivers[nx.i].label}`
+    : "Tudo copiado";
+}
+async function copyNext() {
+  const nx = nextMessage(); if (!nx) return;
+  await copyKind(nx.i, nx.kind);
 }
 
 function fillBody(body, d, mostApprox) {
@@ -719,14 +827,47 @@ function fillBody(body, d, mostApprox) {
       el("tbody", {}, rows)));
 }
 
+// Mapa expandido = janela: foco preso dentro, Esc fecha, enquadra a rota em destaque (ou todas).
 function setMapExpanded(on) {
-  document.querySelector(".s3-map").classList.toggle("expanded", on);
+  const box = $("s3-map");
+  box.classList.toggle("expanded", on);
   document.body.classList.toggle("map-open", on);
+  if (on) { box.setAttribute("role", "dialog"); box.setAttribute("aria-modal", "true"); }
+  else { box.removeAttribute("role"); box.removeAttribute("aria-modal"); }
   const b = $("map-expand"); b.textContent = on ? "Fechar mapa (Esc)" : "Expandir mapa"; b.setAttribute("aria-pressed", on);
-  if (state.map) { setTimeout(() => state.map.invalidateSize(), 50); }
+  b.focus();
+  if (state.map) setTimeout(() => { state.map.invalidateSize(); fitRoute(state.focusRoute); }, 80);
 }
-$("map-expand").addEventListener("click", () => setMapExpanded(!document.querySelector(".s3-map").classList.contains("expanded")));
-document.addEventListener("keydown", (e) => { if (e.key === "Escape" && document.body.classList.contains("map-open")) setMapExpanded(false); });
+function fitRoute(i) {
+  const pts = i == null ? state.allPts : state.routes[i]?.pts;
+  if (state.map && pts?.length) state.map.fitBounds(pts, { padding: [24, 24] });
+}
+$("map-expand").addEventListener("click", () => setMapExpanded(!$("s3-map").classList.contains("expanded")));
+document.addEventListener("keydown", (e) => {
+  if (!document.body.classList.contains("map-open")) return;
+  if (e.key === "Escape") return setMapExpanded(false);
+  if (e.key === "Tab") {
+    const f = [...$("s3-map").querySelectorAll("button, a[href], [tabindex]:not([tabindex='-1'])")].filter((x) => x.offsetParent);
+    if (!f.length) return;
+    if (e.shiftKey && document.activeElement === f[0]) { e.preventDefault(); f[f.length - 1].focus(); }
+    else if (!e.shiftKey && document.activeElement === f[f.length - 1]) { e.preventDefault(); f[0].focus(); }
+  }
+});
+
+// Legenda: cor + número + nome; clicar destaca a rota no mapa e enquadra só ela (clicar de novo volta a todas).
+function renderLegend(r) {
+  state.focusRoute = null;
+  $("map-legend").replaceChildren(...r.drivers.map((d, i) => {
+    const b = el("button", { type: "button", class: "lg", "aria-pressed": "false" },
+      el("span", { class: "swatch", style: `background:${color(i)}`, "aria-hidden": "true" }, String(i + 1)), d.label);
+    b.addEventListener("click", () => {
+      state.focusRoute = state.focusRoute === i ? null : i;
+      $("map-legend").querySelectorAll(".lg").forEach((x, k) => x.setAttribute("aria-pressed", String(k === state.focusRoute)));
+      highlight(null); fitRoute(state.focusRoute);
+    });
+    return b;
+  }));
+}
 
 // Polyline codificada (formato do Google, precisão 5) -> [[lat, lon], ...]
 function decodePolyline(s) {
@@ -763,13 +904,13 @@ function drawMap(r) {
     }
     const start = L.circleMarker(pts[0], { radius: 8, color: "#000", fillColor: c, fillOpacity: 1, weight: 2 }).bindTooltip(`Partida: ${d.label}`).addTo(state.map);
     layers.push(start);
-    state.routes.push({ line, dots, layers });
+    state.routes.push({ line, dots, layers, pts });
     all.push(...pts);
   });
   const end = L.marker([r.depot.lat, r.depot.lon]).bindTooltip("Chegada").addTo(state.map);
   state.routes.push({ line: null, dots: [], layers: [end] });
   // Enquadra assim que o mapa tiver tamanho real (o painel acabou de aparecer e o layout ainda assenta).
-  state.fitPending = all;
+  state.fitPending = all; state.allPts = all;
   const fit = () => {
     if (!state.fitPending || !$("map").clientWidth) return;
     state.map.invalidateSize(); state.map.fitBounds(state.fitPending, { padding: [20, 20] }); state.fitPending = null;
@@ -778,6 +919,7 @@ function drawMap(r) {
   requestAnimationFrame(fit); setTimeout(fit, 300);
 }
 function highlight(i) {
+  i = i ?? state.focusRoute ?? null;    // sem passar o mouse, volta à rota escolhida na legenda
   state.routes.forEach((o, k) => {
     if (!o.line) return;
     const on = i === null || i === k;

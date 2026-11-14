@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Distribuidor de rotas</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11z' fill='%231b62d6'/%3E%3Ccircle cx='12' cy='10' r='2.5' fill='%23fff'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
   <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -32,10 +33,10 @@
     <li data-step="2"><a href="#s2" aria-disabled="true" tabindex="-1"><span>2</span> Entregadores</a></li>
     <li data-step="3"><a href="#s3" aria-disabled="true" tabindex="-1"><span>3</span> Rotas</a></li>
   </ol>
-  <button id="guide-open" class="ghost" aria-controls="guide"><svg class="i"><use href="#i-info"/></svg> Como usar</button>
   <button id="wipe" class="ghost danger" hidden>Apagar dados da sessão</button>
 </header>
 
+<div id="guide-top"></div>
 <details class="guide" id="guide">
   <summary>
     <h2 class="guide-title">Como usar</h2>
@@ -147,11 +148,18 @@
     <details class="adv" id="adv">
       <summary><span>Ajustes da divisão</span><span id="adv-summary" class="muted"></span><svg class="i chev"><use href="#i-chevron"/></svg></summary>
       <div class="adv-body">
+        <fieldset class="presets">
+          <legend>Como dividir</legend>
+          <label class="preset"><input type="radio" name="preset" value="carga"> <span><strong>Carga parecida</strong><span class="muted">Km, entregas e tempo bem próximos entre os entregadores.</span></span></label>
+          <label class="preset"><input type="radio" name="preset" value="km"> <span><strong>Menos km no total</strong><span class="muted">Agrupa por proximidade; a carga pode variar mais.</span></span></label>
+          <label class="preset"><input type="radio" name="preset" value="custom"> <span><strong>Personalizado</strong><span class="muted">Escolha cada ajuste.</span></span></label>
+        </fieldset>
         <div class="field">
-          <label for="tolerance">Tolerância por entrega (min)</label>
+          <label for="tolerance">Folga por entrega (min)</label>
           <input id="tolerance" type="number" min="0" max="30" step="1" value="1">
-          <span class="hint">Folga somada ao tempo parado de cada entrega (vale por entrega, também nas paradas com várias).</span>
+          <span class="hint">Somada ao tempo parado de cada entrega, também nas paradas com várias.</span>
         </div>
+        <div class="custom" id="custom">
         <div class="field">
           <label for="balance-by">Igualar entre os entregadores</label>
           <select id="balance-by">
@@ -161,8 +169,8 @@
           </select>
           <span class="hint" id="balance-help"></span>
         </div>
-        <div class="field">
-          <label for="km-tol">Tolerância na diferença de km (±%)</label>
+        <div class="field" id="km-tol-field">
+          <label for="km-tol">Margem de km (±% da média)</label>
           <input id="km-tol" type="number" min="0" max="100" step="5" placeholder="vazio = km igual">
           <span class="hint" id="km-tol-help"></span>
         </div>
@@ -180,6 +188,7 @@
           <span class="hint" id="zone-now"></span>
           <details class="why"><summary>Como funciona esta barra</summary><p class="hint" id="zone-scale"></p></details>
         </div>
+        </div>
       </div>
     </details>
 
@@ -196,49 +205,60 @@
 <div class="col">
   <section class="panel" id="s3" hidden>
     <h2>Rotas</h2>
-    <p class="lede">Cada linha é uma rota. Toque no nome do entregador para ver a ordem de visita e os links do Maps.</p>
     <div id="summary" class="summary"></div>
+    <div class="sendbar" id="sendbar">
+      <div class="sendbar-status">
+        <strong id="sent-count"></strong>
+        <div class="meter" aria-hidden="true"><i id="sent-meter"></i></div>
+        <span class="muted">Cada entregador recebe duas mensagens, nesta ordem: a rota e depois os links do Maps.</span>
+      </div>
+      <div class="sendbar-actions">
+        <button id="copy-next" class="primary"><svg class="i"><use href="#i-copy"/></svg> <span id="copy-next-label">Copiar próxima mensagem</span></button>
+        <details class="more" id="bulk">
+          <summary>Todas as rotas <svg class="i"><use href="#i-chevron"/></svg></summary>
+          <div class="menu">
+            <button id="copy-all-routes"><svg class="i"><use href="#i-copy"/></svg> Copiar todas as rotas</button>
+            <button id="copy-all-links"><svg class="i"><use href="#i-copy"/></svg> Copiar todos os links</button>
+            <button id="print-all"><svg class="i"><use href="#i-print"/></svg> Imprimir todas</button>
+            <a id="csv-all" href="#"><svg class="i"><use href="#i-download"/></svg> CSV de todas as rotas</a>
+          </div>
+        </details>
+      </div>
+    </div>
     <details class="how">
       <summary><svg class="i"><use href="#i-info"/></svg> Como ler esta tela</summary>
       <dl>
         <dt>Faixas e barras</dt><dd>As faixas mostram o menor e o maior valor entre os entregadores. A barra de cada rota compara o critério escolhido com o da rota mais longa. “Zona principal” é a parte da cidade onde o entregador mais atua.</dd>
         <dt>Parada com “2×”</dt><dd>Entregas no mesmo ponto (casa ou condomínio) viram uma parada só: o entregador para uma vez e o tempo parado aumenta um pouco por entrega a mais.</dd>
         <dt>Copiar e imprimir</dt><dd>“Copiar rota” e “Copiar links” geram duas mensagens separadas, para enviar em sequência no WhatsApp. Em “Mais”, “Imprimir” gera a lista completa do entregador, sem o corte de 10 paradas dos links.</dd>
-        <dt>Estimativas</dt><dd>Os tempos incluem o tempo parado e a tolerância por entrega. Sem o OSRM, tempos e km são estimados em linha reta; com ele, seguem as ruas, mas sem trânsito. Servem para comparar entregadores, não como horário prometido. “Aproximada” significa que só a rua foi localizada.</dd>
+        <dt>Estimativas</dt><dd>Os tempos incluem o tempo parado e a folga por entrega. Sem mapa de ruas, tempos e km são estimados em linha reta; com ele, seguem as ruas, mas sem trânsito. Servem para comparar entregadores, não como horário prometido. “Aproximada” significa que só a rua foi localizada.</dd>
+        <dt>Detalhes deste cálculo</dt><dd id="calc-notes"></dd>
       </dl>
     </details>
-    <div class="actions">
-      <button id="copy-all-routes" class="ghost"><svg class="i"><use href="#i-copy"/></svg> Copiar todas as rotas</button>
-      <button id="copy-all-links" class="ghost"><svg class="i"><use href="#i-copy"/></svg> Copiar todos os links</button>
-      <button id="print-all" class="ghost"><svg class="i"><use href="#i-print"/></svg> Imprimir todas</button>
-      <a id="csv-all" class="btn ghost" href="#"><svg class="i"><use href="#i-download"/></svg> CSV de todas as rotas</a>
-    </div>
-    <p class="hint">Rota e links vão em duas mensagens: envie na ordem. O ✓ marca o que você já copiou.</p>
     <div class="s3-body">
       <div id="drivers-out"></div>
-      <aside class="s3-map">
+      <aside class="s3-map" id="s3-map" aria-label="Mapa das rotas">
         <button type="button" id="map-expand" class="map-expand" aria-pressed="false">Expandir mapa</button>
-        <div id="map"></div>
+        <div id="map" role="region" aria-label="Mapa com as rotas coloridas"></div>
+        <div class="map-legend" id="map-legend" role="group" aria-label="Destacar uma rota no mapa"></div>
         <p class="hint" id="legend"></p>
       </aside>
     </div>
+    <div class="s3-end">
+      <p class="hint">Terminou de enviar? Apague a lista, os nomes e os endereços da memória deste computador.</p>
+      <button id="wipe-end" class="ghost danger">Apagar dados da sessão</button>
+    </div>
   </section>
 
-  <section class="panel" id="empty">
-    <h2>Resultado</h2>
-    <ol class="todo" id="todo">
-      <li class="current" data-step="1">Enviar a lista do dia</li>
-      <li data-step="2">Informar os entregadores</li>
-      <li data-step="3">Calcular as rotas</li>
-    </ol>
-    <p class="lede">Aqui aparecem as faixas de tempo e km, o mapa colorido e uma linha por entregador, com cópia para o WhatsApp e impressão.</p>
+  <section class="panel" id="empty" aria-label="Como usar">
+    <div id="guide-home"></div>
     <p class="busy" id="empty-busy" role="status" hidden></p>
   </section>
 </div>
 </main>
 
 <footer class="foot" id="foot">
-  <p id="foot-map"></p>
+  <p id="foot-map">Conferindo o mapa offline…</p>
   <p id="foot-net"></p>
   <label class="check small"><input type="checkbox" id="map-check"> Procurar atualização do mapa ao abrir</label>
 </footer>
