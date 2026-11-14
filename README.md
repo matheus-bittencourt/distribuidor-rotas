@@ -49,6 +49,7 @@ Rua y, 543;Alberto Jota;BR00123POA
 | Descartar CPF, dívida etc. | Colunas sensíveis caem pelo cabeçalho; o restante passa por regex local (CPF, CNPJ, valores, telefone, e-mail, datas, números longos) **antes** de qualquer uso de IA; a saída da IA é mascarada e conferida contra a linha original. |
 | Arquivos apagados | O arquivo nunca vai para disco. Dados só em memória, somem em 2 h ou no botão "Apagar tudo agora". |
 | Centenas de linhas, por zonas | Cada parada é associada a uma das 10 zonas da cidade (`app/zones.json`) e "puxada" para o centro dela antes do agrupamento (controle **Prioridade por zona**). Depois, k-means de tamanhos iguais + polimento global (OR-Tools). A tela mostra a zona principal de cada entregador e a % de paradas dentro dela. |
+| Equilíbrio entre entregadores | Seletor **"Igualar entre os entregadores"**: quantidade de paradas, tempo de rota ou km rodados, com controle de intensidade. Em tempo/km, quem mora longe ou tem zona espalhada recebe menos paradas (capacidades dos grupos ajustadas em rodadas). Igualar km aumenta a soma de km da operação (ver limites). |
 | Início/fim | Todos saem do ponto padrão (ou da casa, se informada) e **terminam no ponto de chegada**. Entregador listado só pelo nome sai do ponto padrão. |
 | Distância por tempo | Matriz de tempos (OSRM por ruas, ou estimativa por linha reta) + tempo de parada. |
 | Limite de pontos no Maps | Links encadeados de até 10 paradas (9 intermediárias + destino do trecho). O 1º link omite a origem, então o Maps usa a **localização atual**; o último termina no ponto de chegada. |
@@ -88,6 +89,8 @@ descartado) e o que a IA deixa passar cai na heurística.
 - **Geocodificação gratuita é lenta.** O Nominatim público permite ~1 req/s: 900 endereços ≈ 15 min,
   2000 ≈ 35 min, e é uso pesado para um servidor gratuito. Para a rotina diária, um Nominatim próprio
   (recorte do Sul do Brasil) resolve; o app precisaria de Docker, que não está instalado nesta máquina.
+- **Km também são estimados** sem OSRM (linha reta × 1,35). Igualar km tem custo: nos 1400 endereços de
+  teste a soma de km subiu ~14% e a quantidade de paradas passou a variar de 10 a 156 por entregador.
 - **Tempos por estimativa** sem OSRM (linha reta × 1,35 ÷ 28 km/h): bom para dividir regiões,
   impreciso para ETA. O cliente OSRM está implementado, mas **não foi testado contra um servidor real**.
 - **Ollama não testado com modelo real** (não está instalado aqui). O caminho foi testado com uma
@@ -99,6 +102,9 @@ descartado) e o que a IA deixa passar cai na heurística.
   de partida rumo à chegada), não como regra rígida.
 - **Localização atual dos entregadores** em tempo real exige um link hospedado (próximo passo); a POC
   usa o ponto padrão ou o endereço informado.
+- **Elenco lembrado no navegador.** Ao calcular, nomes e casas dos entregadores e os ajustes ficam no
+  `localStorage` deste navegador (nunca no servidor). "Esquecer" remove; "Apagar dados da sessão" apaga a
+  lista do dia, mas não o elenco.
 - **PDF escaneado** não é lido (sem OCR). O limite de 9 intermediários por link do Maps é o documentado:
   confirme no seu uso. O app não tem login: rode só em `127.0.0.1`.
 

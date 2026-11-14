@@ -8,83 +8,154 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2.5 20h19L12 3z"/><path d="M12 10v4M12 17h.01"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 5 5L20 7"/></symbol>
+    <symbol id="i-map" viewBox="0 0 24 24"><path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11z"/><circle cx="12" cy="10" r="2.5"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></symbol>
+  </defs>
+</svg>
+
 <header class="top">
-  <div>
+  <div class="brand">
     <h1>Distribuidor de rotas</h1>
-    <p class="sub">Lê a lista do dia, descarta o que não é nome/endereço e divide as paradas entre os entregadores.</p>
+    <p class="sub">Lê a lista do dia e divide as entregas entre os entregadores.</p>
   </div>
-  <button id="wipe" class="ghost danger" hidden>Apagar tudo agora</button>
+  <ol class="steps" id="steps" aria-label="Etapas">
+    <li class="current" data-step="1"><span>1</span> Lista</li>
+    <li data-step="2"><span>2</span> Entregadores</li>
+    <li data-step="3"><span>3</span> Rotas</li>
+  </ol>
+  <button id="wipe" class="ghost danger" hidden>Apagar dados da sessão</button>
 </header>
 
 <main>
-  <section class="card" id="s1">
-    <h2><span class="n">1</span> Lista do dia</h2>
+  <section class="panel" id="s1">
+    <h2>Lista do dia</h2>
+    <p class="lede">Guardo só nome, endereço e código de rastreio. CPF, valores, telefone e protocolo são descartados neste computador.</p>
     <label class="drop" id="drop">
-      <input type="file" id="file" accept=".xlsx,.xlsm,.csv,.txt,.pdf" hidden>
-      <strong>Escolha ou arraste</strong> uma planilha (.xlsx, .csv) ou PDF
-      <span class="hint">Formato modelo: <code>ENDEREÇO;NOME;COD_RASTREIO</code>. CPF, valores, telefones etc. são removidos neste computador antes de qualquer uso de IA. O arquivo não é gravado em disco.</span>
+      <input type="file" id="file" class="vh" accept=".xlsx,.xlsm,.csv,.txt,.pdf">
+      <strong>Escolha ou arraste o arquivo</strong>
+      <span class="hint">.xlsx, .csv ou PDF · formato modelo <code>ENDEREÇO;NOME;COD_RASTREIO</code></span>
     </label>
-    <div id="s1status" class="status" hidden></div>
+    <div id="s1status" class="status" role="status" hidden></div>
     <div id="s1report" hidden></div>
-    <div id="s1ai" class="hint"></div>
+    <div id="undo" class="status" role="status" hidden></div>
+    <p id="s1ai" class="hint"></p>
   </section>
 
-  <section class="card" id="map-card" hidden>
-    <h2><span class="n">?</span> Formato novo: indique as colunas</h2>
-    <p class="hint">Não reconheci este formato. Diga qual coluna é qual; colunas sensíveis (CPF, valores…) já aparecem bloqueadas e são ignoradas. Mostro só uma amostra mascarada.</p>
+  <section class="panel" id="map-card" hidden>
+    <h2>Indique as colunas</h2>
+    <p class="lede">Não reconheci as colunas deste arquivo. Escolha onde estão o endereço (obrigatório), o nome e o código. Colunas sensíveis ficam bloqueadas.</p>
     <div id="map-table" class="maptable"></div>
-    <div class="grid" id="map-fields"></div>
+    <div class="grid3" id="map-main"></div>
+    <details class="how">
+      <summary><svg class="i"><use href="#i-info"/></svg> Endereço dividido em várias colunas</summary>
+      <div class="grid3" id="map-extra"></div>
+    </details>
     <label class="check"><input type="checkbox" id="map-header" checked> A primeira linha é o cabeçalho</label>
-    <label class="check"><input type="checkbox" id="map-remember" checked> Lembrar este formato para os próximos dias</label>
+    <label class="check"><input type="checkbox" id="map-remember" checked> Lembrar este formato nos próximos dias</label>
+    <div id="map-error" class="status err" role="alert" hidden></div>
     <div class="actions"><button id="map-go" class="primary">Usar estas colunas</button></div>
   </section>
 
-  <section class="card" id="review-card" hidden>
-    <h2><span class="n">!</span> Endereços para revisar <small id="review-count"></small></h2>
-    <p class="hint">Não entram no cálculo enquanto não forem corrigidos. Corrija o endereço, cole as coordenadas do Google Maps ou descarte.</p>
+  <section class="panel" id="review-card" hidden>
+    <h2><svg class="i warn"><use href="#i-alert"/></svg> Endereços para revisar <small id="review-count"></small></h2>
+    <p class="lede">Estas entregas ainda não entram no cálculo: corrija o endereço, cole as coordenadas ou descarte.</p>
+    <details class="how">
+      <summary><svg class="i"><use href="#i-info"/></svg> Como resolver cada caso</summary>
+      <dl>
+        <dt>Buscar</dt><dd>Corrija rua, número ou bairro e procure de novo.</dd>
+        <dt>Usar coords</dt><dd>No Google Maps, clique com o botão direito no local, copie os dois números (<code>-30.0346, -51.2177</code>) e cole. Precisam estar em Porto Alegre.</dd>
+        <dt>Descartar</dt><dd>Tira a entrega da lista de hoje. Dá para desfazer logo em seguida.</dd>
+      </dl>
+    </details>
     <div class="actions"><button id="regeo" class="ghost">Buscar todos de novo</button></div>
     <div id="review-list" class="review"></div>
   </section>
 
-  <section class="card" id="s2" hidden>
-    <h2><span class="n">2</span> Entregadores, partida e chegada</h2>
-    <div class="grid">
-      <label>Ponto de partida padrão e de chegada (igual para todos)
-        <input id="depot" type="text">
-      </label>
-      <label>Quantos entregadores saem do ponto padrão
-        <span class="inline"><input id="n-drivers" type="number" min="1" max="40" value="14"><button id="gen" class="ghost">Gerar lista</button></span>
-      </label>
-      <label>Equilíbrio entre entregadores
-        <input id="balance" type="range" min="0" max="1" step="0.05" value="0.7">
-        <span class="range-legend"><span>menor tempo total</span><span>quantidades iguais</span></span>
-      </label>
-      <label>Prioridade por zona da cidade
-        <input id="zone" type="range" min="0" max="1" step="0.05" value="0.5">
-        <span class="range-legend"><span>só proximidade</span><span>respeitar zonas</span></span>
-      </label>
-    </div>
-    <label>Um entregador por linha: <code>Nome</code> (sai do ponto padrão) ou <code>Nome; endereço da casa ou lat, lon</code>
-      <textarea id="drivers" rows="8" placeholder="Ana&#10;Bruno; Rua Exemplo, 100, Bairro, Porto Alegre&#10;Carla; -30.0500, -51.1800"></textarea>
+  <section class="panel" id="s2" hidden>
+    <h2>Entregadores, partida e chegada</h2>
+    <p class="lede">Defina de onde todos saem e voltam e quem entrega. Depois, calcule.</p>
+
+    <label class="field">Ponto de partida padrão e de chegada
+      <input id="depot" type="text" autocomplete="off">
     </label>
-    <div class="actions">
-      <button id="me" class="ghost">+ Minha localização atual</button>
+
+    <label class="field" for="drivers">Entregadores, um por linha
+      <span class="hint">Só o nome: sai do ponto padrão. <code>Nome; endereço ou lat, lon</code>: sai de casa. Todos chegam ao ponto de chegada.</span>
+    </label>
+    <textarea id="drivers" rows="6" spellcheck="false" placeholder="Ana&#10;Bruno; Rua Exemplo, 100, Bairro, Porto Alegre&#10;Carla; -30.0500, -51.1800"></textarea>
+    <div class="actions tight">
+      <span class="inline"><label class="sr" for="n-drivers">Quantidade</label><input id="n-drivers" type="number" min="1" max="40" value="14"><button id="gen" class="ghost">Gerar lista</button></span>
+      <button id="me" class="ghost">Usar minha localização</button>
       <span id="drivers-count" class="hint"></span>
+    </div>
+    <p id="saved-note" class="hint" hidden>Elenco lembrado neste navegador. <button id="forget" class="link">Esquecer</button></p>
+
+    <details class="adv" id="adv">
+      <summary><span>Ajustes da divisão</span><span id="adv-summary" class="muted"></span><svg class="i chev"><use href="#i-chevron"/></svg></summary>
+      <div class="adv-body">
+        <div class="field">
+          <label for="balance-by">Igualar entre os entregadores</label>
+          <select id="balance-by">
+            <option value="stops">Quantidade de paradas</option>
+            <option value="time">Tempo de rota</option>
+            <option value="km">Km rodados</option>
+          </select>
+          <span class="hint" id="balance-help"></span>
+        </div>
+        <div class="field">
+          <label for="balance">Quanto igualar <output id="balance-out" for="balance"></output></label>
+          <input id="balance" type="range" min="0" max="1" step="0.05" value="0.7">
+          <span class="range-legend"><span>menos km no total</span><span>mais parecidos</span></span>
+        </div>
+        <div class="field">
+          <label for="zone">Respeitar zonas da cidade <output id="zone-out" for="zone"></output></label>
+          <input id="zone" type="range" min="0" max="1" step="0.05" value="0.5">
+          <span class="range-legend"><span>só a distância</span><span>uma zona por entregador</span></span>
+        </div>
+      </div>
+    </details>
+
+    <div class="calc">
+      <p id="plan" class="plan"></p>
       <button id="solve" class="primary">Calcular rotas</button>
     </div>
-    <div id="s2status" class="status" hidden></div>
+    <div id="s2status" class="status" role="status" hidden></div>
   </section>
 
-  <section class="card" id="s3" hidden>
-    <h2><span class="n">3</span> Rotas</h2>
+  <section class="panel" id="s3" hidden>
+    <h2>Rotas</h2>
+    <p class="lede">Cada linha é uma rota. Abra “Paradas” para ver a ordem de visita e os links do Maps.</p>
     <div id="summary" class="summary"></div>
     <div id="map"></div>
-    <p class="hint">Linhas retas ligam as paradas na ordem de visita (não são o traçado das ruas). ● início do entregador, ▲ ponto final.</p>
-    <div class="actions"><a id="csv-all" class="btn ghost" href="#">Baixar CSV de todas as rotas</a></div>
+    <p class="hint" id="legend"></p>
+    <details class="how">
+      <summary><svg class="i"><use href="#i-info"/></svg> Como ler esta tela</summary>
+      <dl>
+        <dt>Faixas (mín–máx)</dt><dd>Menor e maior valor entre os entregadores. Quanto mais próximos, mais igual a divisão.</dd>
+        <dt>Barra de cada rota</dt><dd>Tempo estimado em relação à rota mais longa: inclui o deslocamento e o tempo parado em cada entrega.</dd>
+        <dt>Zona principal</dt><dd>Parte da cidade onde o entregador mais atua. “78% na zona principal” é a média disso entre todos.</dd>
+        <dt>Paradas</dt><dd><b>Trecho</b> é o deslocamento desde a parada anterior; <b>Chega em</b> é o tempo desde a saída. “Aproximada” significa que só a rua foi localizada.</dd>
+        <dt>Links do Maps</dt><dd>Cada link cobre até 10 paradas: abra na ordem. O 1º parte da localização atual do celular e cada seguinte começa onde o anterior terminou.</dd>
+        <dt>Estimativas</dt><dd>Tempos e km são em linha reta, sem as ruas. Servem para comparar entregadores, não como horário prometido.</dd>
+      </dl>
+    </details>
+    <div class="actions">
+      <button id="copy-all" class="ghost"><svg class="i"><use href="#i-copy"/></svg> Copiar todos os textos</button>
+      <a id="csv-all" class="btn ghost" href="#"><svg class="i"><use href="#i-download"/></svg> CSV de todas as rotas</a>
+    </div>
     <div id="drivers-out"></div>
   </section>
 </main>
 
+<p id="live" class="sr" aria-live="polite"></p>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="/static/app.js"></script>
 </body>

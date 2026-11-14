@@ -131,8 +131,31 @@ class Fake:
         return Geo(lat, lon, "exato", "Porto Alegre")
 
 
+class Cache:
+    """Endereços já resolvidos num CSV local (`query;lat;lon;precisao`). Sem rede; ideal para demo e
+    para reaproveitar endereços recorrentes. Consultas fora do arquivo ficam 'não encontradas'."""
+
+    def __init__(self, path: str | None = None):
+        import csv
+        from pathlib import Path
+
+        self._data: dict[str, Geo] = {}
+        p = Path(path or SETTINGS.geocache)
+        if not p.exists():
+            raise RuntimeError(f"Arquivo de geocache não encontrado: {p}")
+        with open(p, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f, delimiter=";"):
+                self._data[row["query"].strip().lower()] = Geo(
+                    float(row["lat"]), float(row["lon"]), row.get("precisao") or "aproximado", "Porto Alegre")
+
+    def geocode(self, query: str, wide: bool = False) -> Geo | None:
+        return self._data.get(query.strip().lower())
+
+
 def make_geocoder():
     name = SETTINGS.geocoder
+    if name == "cache":
+        return Cache()
     if name == "google":
         return Google()
     if name == "fake":

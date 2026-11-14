@@ -10,6 +10,7 @@ import re
 import threading
 from collections import Counter
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -49,7 +50,8 @@ class DriverIn(BaseModel):
 class SolveIn(BaseModel):
     depot: PointIn
     drivers: list[DriverIn] = Field(min_length=1, max_length=40)
-    balance: float = Field(0.7, ge=0, le=1)
+    balance: float = Field(0.7, ge=0, le=1)       # intensidade do equilíbrio
+    balance_by: Literal["stops", "time", "km"] = "stops"  # o que é igualado entre entregadores
     zone_weight: float | None = Field(None, ge=0, le=1)
     time_limit: int | None = Field(None, ge=5, le=300)
     service_seconds: int | None = Field(None, ge=0, le=1800)
@@ -60,6 +62,7 @@ class StopPatch(BaseModel):
     address: str | None = None
     coords: str | None = None   # "lat, lon" colado do Google Maps
     discard: bool | None = None
+    restore: bool | None = None   # desfaz um descarte
 
 
 class MappingIn(BaseModel):
@@ -202,7 +205,9 @@ def patch_stop(job_id: str, stop_id: int, body: StopPatch):
         raise HTTPException(404, "Parada não encontrada.")
     if body.name is not None:
         stop.name = body.name.strip() or stop.name
-    if body.discard:
+    if body.restore:
+        stop.status, stop.reason = "revisar", "restaurada: corrija o endereço ou use coordenadas"
+    elif body.discard:
         stop.status, stop.reason = "descartado", "descartado na revisão"
     elif body.coords:
         m = _COORDS.search(body.coords)
@@ -283,8 +288,8 @@ def _run_solve(job: jobs.Job, req: SolveIn) -> None:
         method = {"v": ""}
 
         def matrix_fn(coords):
-            m, method["v"] = build_matrix(coords)
-            return m
+            t, d, method["v"] = build_matrix(coords)
+            return t, d
 
         service = SETTINGS.service_seconds if req.service_seconds is None else req.service_seconds
         zw = SETTINGS.zone_weight if req.zone_weight is None else req.zone_weight
@@ -292,19 +297,19 @@ def _run_solve(job: jobs.Job, req: SolveIn) -> None:
             stop_xy, np.array(starts), np.array(depot), matrix_fn,
             service_seconds=service, balance=req.balance,
             time_limit=req.time_limit or SETTINGS.solver_seconds,
-            zone_idx=zone_idx, zone_centers=zone_centers, zone_weight=zw,
+            zone_idx=zone_idx, zone_centers=zone_centers, zone_weight=zw, balance_by=req.balance_by,
         )
 
         drivers_out = []
         for i, d in enumerate(req.drivers):
             seq = [ok[j] for j in res.routes[i]]
-            legs = res.leg_seconds[i]
+            legs, meters = res.leg_seconds[i], res.leg_meters[i]
             t, rows = 0, []
-            for order, (s, leg) in enumerate(zip(seq, legs), start=1):
+            for order, (s, leg, leg_m) in enumerate(zip(seq, legs, meters), start=1):
                 t += leg
                 rows.append({
                     "order": order, "id": s.id, "name": s.name, "address": s.address, "code": s.code,
-                    "zone": s.zone, "lat": s.lat, "lon": s.lon, "leg_min": round(leg / 60, 1),
+                    "zone": s.zone, "lat": s.lat, "lon": s.lon, "leg_min": round(leg / 60, 1), "leg_km": round(leg_m / 1000, 1),
                     "eta_min": round(t / 60), "precision": s.precision,
                 })
                 t += service
@@ -316,6 +321,7 @@ def _run_solve(job: jobs.Job, req: SolveIn) -> None:
                 "count": len(seq), "stops": rows,
                 "travel_min": round(travel / 60), "total_min": round((travel + service * len(seq)) / 60),
                 "last_leg_min": round(legs[-1] / 60, 1) if legs else 0,
+                "km": round(sum(meters) / 1000, 1),
                 "zones": [{"name": n, "count": c} for n, c in zc],
                 "main_zone_share": round(zc[0][1] / len(seq), 2) if seq else 0,
                 # sem origem no 1º link: o Maps parte da localização atual de quem abre o link
@@ -325,7 +331,7 @@ def _run_solve(job: jobs.Job, req: SolveIn) -> None:
         shares = [(d["main_zone_share"], d["count"]) for d in drivers_out if d["count"]]
         job.result = {
             "depot": {"lat": depot[0], "lon": depot[1], "address": req.depot.address or ""},
-            "balance": req.balance, "zone_weight": zw, "matrix": method["v"], "service_seconds": service,
+            "balance": req.balance, "balance_by": req.balance_by, "zone_weight": zw, "matrix": method["v"], "service_seconds": service,
             "total_min": round(res.total_seconds / 60), "status": res.status,
             "zone_purity": round(sum(a * b for a, b in shares) / max(sum(b for _, b in shares), 1), 2),
             "drivers": drivers_out,
@@ -362,13 +368,13 @@ def export_csv(job_id: str, driver: int | None = None):
     buf = io.StringIO()
     w = csv.writer(buf, delimiter=";")
     w.writerow(["entregador", "ordem", "nome", "endereco", "codigo_rastreio", "zona", "latitude", "longitude",
-                "chegada_estimada_min"])
+                "chegada_estimada_min", "distancia_trecho_km"])
     for d in job.result["drivers"]:
         if driver is not None and d["index"] != driver:
             continue
         for r in d["stops"]:
             w.writerow([d["label"], r["order"], r["name"], r["address"], r["code"], r["zone"],
-                        r["lat"], r["lon"], r["eta_min"]])
+                        r["lat"], r["lon"], r["eta_min"], r["leg_km"]])
     return Response(
         ("﻿" + buf.getvalue()).encode("utf-8"), media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="rotas.csv"'},

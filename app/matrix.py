@@ -21,13 +21,17 @@ def estimated_matrix(coords: np.ndarray) -> np.ndarray:
     return np.rint(km / SETTINGS.avg_speed_kmh * 3600).astype(np.int64)
 
 
-def osrm_matrix(coords: np.ndarray, base_url: str | None = None, block: int | None = None) -> np.ndarray:
-    """Tempos reais por ruas via OSRM (/table), em blocos para respeitar --max-table-size."""
+def estimated_dist_m(coords: np.ndarray) -> np.ndarray:
+    """Distância estimada em metros: linha reta x fator de desvio."""
+    return np.rint(haversine_km(coords, coords) * SETTINGS.detour_factor * 1000).astype(np.int64)
+
+
+def osrm_matrix(coords: np.ndarray, base_url: str | None = None, block: int | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """Tempos (s) e distâncias (m) reais por ruas via OSRM (/table), em blocos para respeitar --max-table-size."""
     base_url = (base_url or SETTINGS.osrm_url).rstrip("/")
     block = block or SETTINGS.osrm_block
     n = len(coords)
-    fallback = estimated_matrix(coords)
-    out = fallback.copy()
+    dur, dist = estimated_matrix(coords).copy(), estimated_dist_m(coords).copy()
     with httpx.Client(timeout=60) as client:
         for i0 in range(0, n, block):
             src = list(range(i0, min(i0 + block, n)))
@@ -39,22 +43,26 @@ def osrm_matrix(coords: np.ndarray, base_url: str | None = None, block: int | No
                 params = {
                     "sources": ";".join(str(pos[k]) for k in src),
                     "destinations": ";".join(str(pos[k]) for k in dst),
-                    "annotations": "duration",
+                    "annotations": "duration,distance",
                 }
                 r = client.get(f"{base_url}/table/v1/driving/{path}", params=params)
                 r.raise_for_status()
-                durations = r.json()["durations"]
-                for a, row in zip(src, durations):
-                    for b, v in zip(dst, row):
-                        if v is not None:  # sem rota: mantém a estimativa
-                            out[a, b] = int(round(v))
-    return out
+                body = r.json()
+                for a, row_t, row_d in zip(src, body["durations"], body["distances"]):
+                    for b, t, d in zip(dst, row_t, row_d):
+                        if t is not None:  # sem rota: mantém a estimativa
+                            dur[a, b] = int(round(t))
+                        if d is not None:
+                            dist[a, b] = int(round(d))
+    return dur, dist
 
 
-def build_matrix(coords: np.ndarray) -> tuple[np.ndarray, str]:
+def build_matrix(coords: np.ndarray) -> tuple[np.ndarray, np.ndarray, str]:
+    """(tempos em s, distâncias em m, origem dos números)."""
     if SETTINGS.matrix == "osrm":
         try:
-            return osrm_matrix(coords), "osrm"
+            t, d = osrm_matrix(coords)
+            return t, d, "osrm"
         except Exception:
-            return estimated_matrix(coords), "estimativa (OSRM indisponível)"
-    return estimated_matrix(coords), "estimativa"
+            return estimated_matrix(coords), estimated_dist_m(coords), "estimativa (OSRM indisponível)"
+    return estimated_matrix(coords), estimated_dist_m(coords), "estimativa"

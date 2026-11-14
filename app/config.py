@@ -35,6 +35,8 @@ class Settings:
     claude_model: str = os.environ.get("CLAUDE_MODEL", "claude-opus-5-5")
     # Geocodificação: nominatim | google | fake
     geocoder: str = os.environ.get("GEOCODER", "nominatim")
+    # GEOCODER=cache: lê endereço->coordenadas de um CSV local (query;lat;lon;precisao), sem rede
+    geocache: str = os.environ.get("GEOCACHE", "data/geocache.csv")
     nominatim_url: str = os.environ.get("NOMINATIM_URL", "https://nominatim.openstreetmap.org")
     nominatim_rate: float = _f("NOMINATIM_RATE", 1.0)  # requisições/s (1 = política do servidor público)
     nominatim_user_agent: str = os.environ.get("NOMINATIM_USER_AGENT", "distribuidor-rotas-poc")
