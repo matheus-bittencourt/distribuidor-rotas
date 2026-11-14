@@ -1,0 +1,15 @@
+{
+  "_aviso": "Centros APROXIMADOS das zonas de Porto Alegre, de memória: confira e ajuste lat/lon/nome. Cada parada pertence à zona de centro mais próximo.",
+  "zones": [
+    {"name": "Centro", "lat": -30.0400, "lon": -51.2200},
+    {"name": "Leste Central (Moinhos/Petrópolis)", "lat": -30.0260, "lon": -51.1950},
+    {"name": "Norte Central (Navegantes/Humaitá)", "lat": -30.0050, "lon": -51.2050},
+    {"name": "Norte (Sarandi/Passo d'Areia)", "lat": -30.0000, "lon": -51.1500},
+    {"name": "Nordeste (Rubem Berta)", "lat": -29.9850, "lon": -51.1150},
+    {"name": "Leste (Partenon/Lomba)", "lat": -30.0750, "lon": -51.1300},
+    {"name": "Sul Central (Cavalhada/Cristal)", "lat": -30.0900, "lon": -51.2200},
+    {"name": "Sul (Tristeza/Ipanema)", "lat": -30.1200, "lon": -51.2400},
+    {"name": "Sudeste (Restinga)", "lat": -30.1500, "lon": -51.1500},
+    {"name": "Extremo Sul (Belém Novo/Lami)", "lat": -30.2000, "lon": -51.1900}
+  ]
+}

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Distribuidor de rotas</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <div>
+    <h1>Distribuidor de rotas</h1>
+    <p class="sub">Lê a lista do dia, descarta o que não é nome/endereço e divide as paradas entre os entregadores.</p>
+  </div>
+  <button id="wipe" class="ghost danger" hidden>Apagar tudo agora</button>
+</header>
+
+<main>
+  <section class="card" id="s1">
+    <h2><span class="n">1</span> Lista do dia</h2>
+    <label class="drop" id="drop">
+      <input type="file" id="file" accept=".xlsx,.xlsm,.csv,.txt,.pdf" hidden>
+      <strong>Escolha ou arraste</strong> uma planilha (.xlsx, .csv) ou PDF
+      <span class="hint">Formato modelo: <code>ENDEREÇO;NOME;COD_RASTREIO</code>. CPF, valores, telefones etc. são removidos neste computador antes de qualquer uso de IA. O arquivo não é gravado em disco.</span>
+    </label>
+    <div id="s1status" class="status" hidden></div>
+    <div id="s1report" hidden></div>
+    <div id="s1ai" class="hint"></div>
+  </section>
+
+  <section class="card" id="map-card" hidden>
+    <h2><span class="n">?</span> Formato novo: indique as colunas</h2>
+    <p class="hint">Não reconheci este formato. Diga qual coluna é qual; colunas sensíveis (CPF, valores…) já aparecem bloqueadas e são ignoradas. Mostro só uma amostra mascarada.</p>
+    <div id="map-table" class="maptable"></div>
+    <div class="grid" id="map-fields"></div>
+    <label class="check"><input type="checkbox" id="map-header" checked> A primeira linha é o cabeçalho</label>
+    <label class="check"><input type="checkbox" id="map-remember" checked> Lembrar este formato para os próximos dias</label>
+    <div class="actions"><button id="map-go" class="primary">Usar estas colunas</button></div>
+  </section>
+
+  <section class="card" id="review-card" hidden>
+    <h2><span class="n">!</span> Endereços para revisar <small id="review-count"></small></h2>
+    <p class="hint">Não entram no cálculo enquanto não forem corrigidos. Corrija o endereço, cole as coordenadas do Google Maps ou descarte.</p>
+    <div class="actions"><button id="regeo" class="ghost">Buscar todos de novo</button></div>
+    <div id="review-list" class="review"></div>
+  </section>
+
+  <section class="card" id="s2" hidden>
+    <h2><span class="n">2</span> Entregadores, partida e chegada</h2>
+    <div class="grid">
+      <label>Ponto de partida padrão e de chegada (igual para todos)
+        <input id="depot" type="text">
+      </label>
+      <label>Quantos entregadores saem do ponto padrão
+        <span class="inline"><input id="n-drivers" type="number" min="1" max="40" value="14"><button id="gen" class="ghost">Gerar lista</button></span>
+      </label>
+      <label>Equilíbrio entre entregadores
+        <input id="balance" type="range" min="0" max="1" step="0.05" value="0.7">
+        <span class="range-legend"><span>menor tempo total</span><span>quantidades iguais</span></span>
+      </label>
+      <label>Prioridade por zona da cidade
+        <input id="zone" type="range" min="0" max="1" step="0.05" value="0.5">
+        <span class="range-legend"><span>só proximidade</span><span>respeitar zonas</span></span>
+      </label>
+    </div>
+    <label>Um entregador por linha: <code>Nome</code> (sai do ponto padrão) ou <code>Nome; endereço da casa ou lat, lon</code>
+      <textarea id="drivers" rows="8" placeholder="Ana&#10;Bruno; Rua Exemplo, 100, Bairro, Porto Alegre&#10;Carla; -30.0500, -51.1800"></textarea>
+    </label>
+    <div class="actions">
+      <button id="me" class="ghost">+ Minha localização atual</button>
+      <span id="drivers-count" class="hint"></span>
+      <button id="solve" class="primary">Calcular rotas</button>
+    </div>
+    <div id="s2status" class="status" hidden></div>
+  </section>
+
+  <section class="card" id="s3" hidden>
+    <h2><span class="n">3</span> Rotas</h2>
+    <div id="summary" class="summary"></div>
+    <div id="map"></div>
+    <p class="hint">Linhas retas ligam as paradas na ordem de visita (não são o traçado das ruas). ● início do entregador, ▲ ponto final.</p>
+    <div class="actions"><a id="csv-all" class="btn ghost" href="#">Baixar CSV de todas as rotas</a></div>
+    <div id="drivers-out"></div>
+  </section>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
