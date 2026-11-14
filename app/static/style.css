@@ -220,6 +220,13 @@ td.num, th.num { text-align: right; white-space: nowrap; }
   .stops .c-addr { grid-column: 2 / 4; }
   .stops .c-code { grid-column: 2; color: var(--muted); }
   .stops .c-leg { grid-column: 3; text-align: right; color: var(--muted); }
+  /* parada com várias entregas: cada entrega mantém nome, endereço e código juntos */
+  .stops tr.multi .c-n { grid-row: 1 / span var(--span); }
+  .stops tr.multi td.c-name, .stops tr.multi td.c-addr, .stops tr.multi td.c-code { display: contents; }
+  .stops tr.multi .c-name .d { grid-column: 2; grid-row: calc(var(--r) + 1); font-weight: 600; }
+  .stops tr.multi .c-addr .d { grid-column: 2 / 4; grid-row: calc(var(--r) + 2); }
+  .stops tr.multi .c-code .d { grid-column: 2; grid-row: calc(var(--r) + 3); color: var(--muted); margin-bottom: .35rem; }
+  .stops tr.multi .c-leg { grid-row: var(--span); }
 }
 .stops td.c-n { min-width: 3.4rem; }
 @media (max-width: 760px) {

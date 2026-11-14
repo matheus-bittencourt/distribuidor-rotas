@@ -576,14 +576,19 @@ function fillBody(body, d, mostApprox) {
   const links = el("div", { class: "links" }, ...d.links.map((l, k) =>
     el("a", { href: l.url, target: "_blank", rel: "noopener" },
       l.first > l.last ? `Trecho ${k + 1} · última parada → chegada` : `Trecho ${k + 1} · paradas ${l.first}–${l.last}${l.ends_at_depot ? " → chegada" : ""}`)));
-  const rows = d.stops.map((s) => el("tr", {},
-    el("td", { class: "num c-n" }, s.order, s.n_deliveries > 1 ? el("span", { class: "badge" }, `${s.n_deliveries}×`) : ""),
-    el("td", { class: "c-name" }, s.n_deliveries > 1 ? s.deliveries.map((x) => el("div", {}, x.name)) : s.name),
-    el("td", { class: "c-addr" }, s.n_deliveries > 1 ? s.deliveries.map((x) => el("div", {}, x.address)) : s.address,
-      !mostApprox && s.precision === "aproximado" ? el("span", { class: "approx" }, " ", icon("alert"), " aproximada") : ""),
-    el("td", { class: "c-code" }, s.n_deliveries > 1 ? s.deliveries.map((x) => el("div", {}, x.code)) : s.code),
-    el("td", { class: "num c-leg" }, `+${Math.round(s.leg_min)} min · ${s.leg_km.toFixed(1)} km`),
-    el("td", { class: "num c-eta" }, fmtMin(s.eta_min))));
+  const rows = d.stops.map((s) => {
+    const multi = s.n_deliveries > 1, approx = !mostApprox && s.precision === "aproximado";
+    const mark = el("span", { class: "approx" }, " ", icon("alert"), " aproximada");
+    // Várias entregas: cada uma é um bloco (nome, endereço, código) com linha própria no cartão do celular (--r).
+    const cell = (cls, pick, single) => el("td", { class: cls },
+      multi ? s.deliveries.map((x, j) => el("div", { class: "d", style: `--r:${3 * j}` }, pick(x), cls === "c-addr" && j === 0 && approx ? mark.cloneNode(true) : "")) : single,
+      !multi && cls === "c-addr" && approx ? mark : "");
+    return el("tr", multi ? { class: "multi", style: `--span:${3 * s.n_deliveries}` } : {},
+      el("td", { class: "num c-n" }, s.order, multi ? el("span", { class: "badge" }, `${s.n_deliveries}×`) : ""),
+      cell("c-name", (x) => x.name, s.name), cell("c-addr", (x) => x.address, s.address), cell("c-code", (x) => x.code, s.code),
+      el("td", { class: "num c-leg" }, `+${Math.round(s.leg_min)} min · ${s.leg_km.toFixed(1)} km`),
+      el("td", { class: "num c-eta" }, fmtMin(s.eta_min)));
+  });
   body.append(el("p", { class: "hint" }, "Links do Maps (abra na ordem):"), links,
     el("table", { class: "stops" },
       el("thead", {}, el("tr", {}, ...["#", "Nome", "Endereço", "Rastreio", "Trecho", "Chega em"].map((h, k) => el("th", { class: [0, 4, 5].includes(k) ? "num" : "" }, h)))),
