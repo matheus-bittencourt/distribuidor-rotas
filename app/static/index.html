@@ -32,8 +32,40 @@
     <li data-step="2"><a href="#s2" aria-disabled="true" tabindex="-1"><span>2</span> Entregadores</a></li>
     <li data-step="3"><a href="#s3" aria-disabled="true" tabindex="-1"><span>3</span> Rotas</a></li>
   </ol>
+  <button id="guide-open" class="ghost" aria-controls="guide"><svg class="i"><use href="#i-info"/></svg> Como usar</button>
   <button id="wipe" class="ghost danger" hidden>Apagar dados da sessão</button>
 </header>
+
+<details class="guide" id="guide">
+  <summary>
+    <span class="guide-title">Como usar</span>
+    <span class="muted guide-sub">Quatro passos. Na primeira vez leva uns 5 minutos; depois, é repetir a cada dia.</span>
+    <svg class="i chev"><use href="#i-chevron"/></svg>
+  </summary>
+  <ol class="guide-steps">
+    <li>
+      <h3>Prepare a lista</h3>
+      <p>Planilha (.xlsx ou .csv) com <strong>endereço, nome e código de rastreio</strong>, ou o PDF do dia. Outras colunas podem ficar: CPF, valores, telefone e protocolo são descartados na hora, neste computador.</p>
+      <button type="button" class="link" id="guide-sample"><svg class="i"><use href="#i-download"/></svg> Baixar modelo de planilha</button>
+    </li>
+    <li>
+      <h3>Envie e confira os endereços</h3>
+      <p>Arraste o arquivo para <a href="#s1" data-go="s1">Lista do dia</a>. O que não for encontrado vai para <strong>Endereços para revisar</strong>: corrija a rua ou cole as coordenadas do Google Maps. <strong>Aproximado</strong> quer dizer que só a rua foi localizada; a ordem das paradas continua valendo.</p>
+      <p class="tip">Ter o bairro no endereço ajuda a achar a rua certa quando há ruas com o mesmo nome.</p>
+    </li>
+    <li>
+      <h3>Informe os entregadores</h3>
+      <p>Um por linha. Só o nome: sai de <span id="guide-depot">o ponto padrão</span>. <code>Nome; endereço</code>: sai de casa. Todos terminam no ponto de chegada.</p>
+      <p>Em <strong>Ajustes da divisão</strong> você escolhe o que igualar entre eles (km, tempo ou paradas) e a folga por entrega.</p>
+    </li>
+    <li>
+      <h3>Calcule e envie</h3>
+      <p>Cada entregador recebe duas mensagens no WhatsApp, nesta ordem: <strong>Copiar rota</strong> e <strong>Copiar links</strong> (cada link do Maps leva até 10 paradas). <strong>Imprimir</strong> gera a lista completa, com caixas para marcar.</p>
+      <p>Ao terminar o dia, use <strong>Apagar dados da sessão</strong>.</p>
+    </li>
+  </ol>
+  <p class="guide-privacy"><svg class="i"><use href="#i-lock"/></svg> <span id="guide-privacy"></span></p>
+</details>
 
 <section class="banner" id="map-update" aria-live="polite" hidden>
   <svg class="i"><use href="#i-map"/></svg>

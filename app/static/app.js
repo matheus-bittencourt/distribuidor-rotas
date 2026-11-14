@@ -144,7 +144,40 @@ async function init() {
   updatePlan();
   const saved = (() => { try { return sessionStorage.getItem(JOB_KEY); } catch { return null; } })();
   if (saved) await restore(saved);
+  guideInit();
   mapInit();
+}
+
+// ------------------------------------------------------------------ tutorial "Como usar"
+// Aberto na primeira visita; depois fica como a pessoa deixou (só neste navegador).
+const GUIDE_KEY = "distribuidor.guia.v1";
+const SAMPLE_CSV = [
+  "ENDEREÇO;NOME;COD_RASTREIO",
+  "Rua dos Andradas, 1000, Centro Histórico;Cliente Exemplo 1;BR000000001BR",
+  "Av. Ipiranga, 6681, Partenon;Cliente Exemplo 2;BR000000002BR",
+  "Av. Protásio Alves, 2000, Petrópolis;Cliente Exemplo 3;BR000000003BR",
+  "Rua Padre Chagas, 300 apto 402, Moinhos de Vento;Cliente Exemplo 4;BR000000004BR",
+].join("\r\n");
+
+function guideInit() {
+  const g = $("guide");
+  const seen = (() => { try { return localStorage.getItem(GUIDE_KEY); } catch { return null; } })();
+  g.open = seen !== "fechado" && !state.job;
+  g.addEventListener("toggle", () => { try { localStorage.setItem(GUIDE_KEY, g.open ? "aberto" : "fechado"); } catch {} });
+  $("guide-open").addEventListener("click", () => { g.open = true; g.scrollIntoView({ behavior: "smooth", block: "start" }); g.querySelector("summary").focus({ preventScroll: true }); });
+  g.querySelectorAll("[data-go]").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); $(a.dataset.go).scrollIntoView({ behavior: "smooth", block: "start" }); }));
+  $("guide-depot").textContent = `o ponto padrão (${state.cfg.default_depot.split(",").slice(0, 2).join(",")})`;
+  const local = ["local", "cache", "fake"].includes(state.cfg.geocoder);
+  const ttl = `${Math.round(state.cfg.job_ttl_minutes / 60)} h`;
+  $("guide-privacy").textContent = state.cfg.offline
+    ? `Modo isolado: a lista fica só na memória deste computador e some ao fechar o app (ou depois de ${ttl}). Nenhuma conexão sai daqui; a única exceção é a busca de atualização do mapa, feita ao abrir e antes de qualquer lista.`
+    : `A lista fica só na memória deste computador e some ao apagar os dados ou depois de ${ttl}. ${local ? "Os endereços são localizados aqui mesmo, sem internet." : "Neste modo, os endereços (sem nomes) são consultados no OpenStreetMap pela internet; para não enviar nada, use o executável do pen drive."}`;
+  $("guide-sample").addEventListener("click", () => {
+    const url = URL.createObjectURL(new Blob(["﻿" + SAMPLE_CSV], { type: "text/csv;charset=utf-8" }));
+    const a = el("a", { href: url, download: "modelo-entregas.csv" }); document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    announce("Modelo de planilha baixado");
+  });
 }
 
 // ------------------------------------------------------------------ pacote de mapa: versão e atualização
