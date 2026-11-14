@@ -62,6 +62,28 @@ def osrm_matrix(coords: np.ndarray, base_url: str | None = None, block: int | No
     return dur, dist
 
 
+def osrm_paths(routes: list[list[tuple[float, float]]], base_url: str | None = None) -> list[str | None]:
+    """Trajeto por ruas de cada rota (lista de pontos lat/lon em ordem), como polyline codificada
+    (precisão 5, formato do Google). None quando a rota não pôde ser traçada: o mapa usa linhas retas."""
+    base_url = (base_url or SETTINGS.osrm_url).rstrip("/")
+
+    def one(client, pts):
+        if len(pts) < 2:
+            return None
+        try:
+            path = ";".join(f"{lon:.6f},{lat:.6f}" for lat, lon in pts)
+            r = client.get(f"{base_url}/route/v1/driving/{path}",
+                           params={"overview": "full", "geometries": "polyline", "continue_straight": "false"})
+            r.raise_for_status()
+            body = r.json()
+            return body["routes"][0]["geometry"] if body.get("code") == "Ok" and body.get("routes") else None
+        except Exception:
+            return None
+
+    with httpx.Client(timeout=60) as client, ThreadPoolExecutor(max_workers=SETTINGS.osrm_workers) as pool:
+        return list(pool.map(lambda p: one(client, p), routes))
+
+
 def build_matrix(coords: np.ndarray) -> tuple[np.ndarray, np.ndarray, str]:
     """(tempos em s, distâncias em m, origem dos números)."""
     if SETTINGS.matrix == "osrm":

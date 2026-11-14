@@ -64,6 +64,11 @@ def main():
     csv_text = call("GET", f"/api/jobs/{job}/export.csv")
     everything += [json.dumps(res), csv_text]
     print(f"cálculo {time.time() - t1:.1f}s | total={res['total_min'] / 60:.1f}h | tempos por {res['matrix']}")
+    if res["matrix"] == "osrm":  # com OSRM, cada rota com paradas traz o trajeto por ruas para o mapa
+        com = [d for d in res["drivers"] if d["stops"]]
+        sem = [d["label"] for d in com if not d.get("path")]
+        print(f"trajeto por ruas: {len(com) - len(sem)}/{len(com)} rotas | {sum(len(d['path'] or '') for d in com) // 1024} KB")
+        assert not sem, sem
 
     # entregas no mesmo endereço viram uma parada só: confere pelas entregas, não pelas paradas
     ids = [x["id"] for d in res["drivers"] for s in d["stops"] for x in s["deliveries"]]

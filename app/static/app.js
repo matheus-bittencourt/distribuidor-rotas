@@ -527,7 +527,9 @@ function renderResult(r) {
     ...(r.unrouted.length ? [el("div", { class: "status warn" }, icon("alert"),
       el("span", {}, `${r.unrouted.length} entrega${r.unrouted.length > 1 ? "s ficaram" : " ficou"} de fora. Resolva em “Endereços para revisar” e calcule de novo.`))] : []),
   );
-  $("legend").textContent = "Cada cor é uma rota e o número marca a primeira parada dela. Círculo grande = partida; pino azul = chegada. Linhas retas, não as ruas.";
+  const byStreet = r.drivers.some((d) => d.path);
+  $("legend").textContent = "Cada cor é uma rota e o número marca a primeira parada dela. Círculo grande = partida; pino azul = chegada. "
+    + (byStreet ? "Linhas seguem as ruas." : "Linhas retas, não as ruas.");
   $("csv-all").href = `/api/jobs/${state.job}/export.csv`;
   state.texts = dr.map((d) => ({ rota: routeText(d, r.depot.address), links: linksText(d) }));
   state.sent = dr.map(() => ({ rota: false, links: false }));
@@ -604,6 +606,14 @@ function setMapExpanded(on) {
 $("map-expand").addEventListener("click", () => setMapExpanded(!document.querySelector(".s3-map").classList.contains("expanded")));
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && document.body.classList.contains("map-open")) setMapExpanded(false); });
 
+// Polyline codificada (formato do Google, precisão 5) -> [[lat, lon], ...]
+function decodePolyline(s) {
+  const out = []; let i = 0, lat = 0, lon = 0;
+  const next = () => { let r = 0, sh = 0, b; do { b = s.charCodeAt(i++) - 63; r |= (b & 31) << sh; sh += 5; } while (b >= 32); return r & 1 ? ~(r >> 1) : r >> 1; };
+  while (i < s.length) { lat += next(); lon += next(); out.push([lat / 1e5, lon / 1e5]); }
+  return out;
+}
+
 function drawMap(r) {
   if (!state.map) {
     state.map = L.map("map", { preferCanvas: true });
@@ -613,7 +623,8 @@ function drawMap(r) {
   const all = [[r.depot.lat, r.depot.lon]];
   r.drivers.forEach((d, i) => {
     const c = color(i), pts = [[d.start.lat, d.start.lon], ...d.stops.map((s) => [s.lat, s.lon]), [r.depot.lat, r.depot.lon]];
-    const line = L.polyline(pts, { color: c, weight: 2, opacity: 0.6 }).addTo(state.map);
+    // Com OSRM vem o trajeto por ruas; sem ele, liga as paradas em linha reta.
+    const line = L.polyline(d.path ? decodePolyline(d.path) : pts, { color: c, weight: 2, opacity: 0.6 }).addTo(state.map);
     const dots = d.stops.map((s) => L.circleMarker([s.lat, s.lon], { radius: 4, color: c, fillColor: c, fillOpacity: 0.9, weight: 1 })
       .bindTooltip(`${d.label} · #${s.order}`).addTo(state.map));
     const layers = [line, ...dots];

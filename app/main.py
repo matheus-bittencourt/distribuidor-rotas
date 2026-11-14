@@ -23,7 +23,7 @@ from .config import FALLBACK_DEPOT, RMPA_CITIES, SETTINGS
 from .extract import COLUMN_LABELS, NeedMapping, extract, llm_provider, to_query
 from .geocode import geocode_stops, in_metro, in_region, make_geocoder
 from .links import build_links
-from .matrix import build_matrix
+from .matrix import build_matrix, osrm_paths
 from .sanitize import is_sensitive_header, strip_accents
 from .solver import solve
 
@@ -362,6 +362,13 @@ def _run_solve(job: jobs.Job, req: SolveIn) -> None:
                 "links": build_links([(v[0].lat, v[0].lon) for v in seq], depot,
                                      per_link=SETTINGS.maps_waypoints_per_link),
             })
+        # Trajeto por ruas para o mapa (só com OSRM; sem ele o mapa liga as paradas em linha reta).
+        if method["v"] == "osrm":
+            job.message = "Traçando o trajeto por ruas"
+            pts = [[(d["start"]["lat"], d["start"]["lon"]), *((s["lat"], s["lon"]) for s in d["stops"]), depot]
+                   if d["stops"] else [] for d in drivers_out]
+            for d, p in zip(drivers_out, osrm_paths(pts)):
+                d["path"] = p
         shares = [(d["main_zone_share"], d["count"]) for d in drivers_out if d["count"]]
         job.result = {
             "depot": {"lat": depot[0], "lon": depot[1], "address": req.depot.address or ""},
