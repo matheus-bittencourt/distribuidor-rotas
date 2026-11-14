@@ -154,6 +154,11 @@ class Cache:
 
 def make_geocoder():
     name = SETTINGS.geocoder
+    if name == "local":
+        from . import mapdata
+        return mapdata.geocoder()
+    if SETTINGS.offline and name in ("nominatim", "google"):
+        raise RuntimeError("Modo isolado: geocodificação pela internet desligada. Use GEOCODER=local.")
     if name == "cache":
         return Cache()
     if name == "google":

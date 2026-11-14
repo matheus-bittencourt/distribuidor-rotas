@@ -6,3 +6,10 @@ __pycache__/
 amostras/
 data/
 osrm-data/
+dist/
+build/
+mapdata/
+*.spec.bak
+preferencias.json
+.claude/
+.impeccable/

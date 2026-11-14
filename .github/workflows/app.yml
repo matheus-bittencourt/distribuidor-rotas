@@ -1,0 +1,70 @@
+# Testa e gera o executável Windows (pasta pronta para o pen drive) a cada versão "v*".
+name: Executável Windows
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Dependências
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Testes
+        run: python -m pytest -q
+
+      - name: Executável
+        run: pyinstaller --noconfirm distribuidor.spec
+
+      - name: Incluir o mapa mais recente (pronto para usar sem internet)
+        shell: bash
+        run: |
+          set -e
+          base=https://github.com/${{ github.repository }}/releases/download/mapa-atual
+          if curl -fsSL -o manifest.json $base/manifest.json; then
+            url=$(python -c "import json;print(json.load(open('manifest.json'))['url'])")
+            ver=$(python -c "import json;print(json.load(open('manifest.json'))['version'])")
+            sha=$(python -c "import json;print(json.load(open('manifest.json'))['sha256'])")
+            curl -fsSL -o mapa.zip "$url"
+            echo "$sha  mapa.zip" | sha256sum -c
+            mkdir -p "dist/DistribuidorRotas/mapa/$ver"
+            unzip -q mapa.zip -d "dist/DistribuidorRotas/mapa/$ver"
+            printf "%s" "$ver" > dist/DistribuidorRotas/mapa/atual.txt
+          else
+            echo "Ainda não há pacote de mapa publicado: o app oferece o download na primeira abertura."
+          fi
+          cp LEIA-ME.txt dist/DistribuidorRotas/
+
+      - name: Compactar
+        shell: pwsh
+        run: Compress-Archive -Path dist/DistribuidorRotas -DestinationPath DistribuidorRotas-windows.zip
+
+      - name: Publicar no release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release view "${{ github.ref_name }}" >/dev/null 2>&1 || gh release create "${{ github.ref_name }}" \
+            --title "Distribuidor de rotas ${{ github.ref_name }}" --notes-file docs/release-notes.md
+          gh release upload "${{ github.ref_name }}" DistribuidorRotas-windows.zip --clobber
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DistribuidorRotas-windows
+          path: DistribuidorRotas-windows.zip

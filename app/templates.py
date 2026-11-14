@@ -10,7 +10,9 @@ from pathlib import Path
 
 from .sanitize import norm_header
 
-PATH = Path(__file__).resolve().parent.parent / "data" / "templates.json"
+from .mapdata import base_dir  # noqa: E402
+
+PATH = base_dir() / "data" / "templates.json"   # ao lado do executável no pen drive
 _LOCK = threading.Lock()
 
 

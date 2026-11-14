@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Distribuidor de rotas</title>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -34,6 +34,19 @@
   </ol>
   <button id="wipe" class="ghost danger" hidden>Apagar dados da sessão</button>
 </header>
+
+<section class="banner" id="map-update" aria-live="polite" hidden>
+  <svg class="i"><use href="#i-map"/></svg>
+  <div class="banner-text">
+    <strong id="map-update-title"></strong>
+    <span id="map-update-detail" class="muted"></span>
+    <div class="meter" id="map-update-meter" hidden><i></i></div>
+  </div>
+  <div class="banner-actions">
+    <button id="map-update-go" class="primary"><svg class="i"><use href="#i-download"/></svg> Baixar</button>
+    <button id="map-update-later" class="ghost">Agora não</button>
+  </div>
+</section>
 
 <main>
 <div class="col">
@@ -192,6 +205,12 @@
 </div>
 </main>
 
+<footer class="foot" id="foot">
+  <p id="foot-map"></p>
+  <p id="foot-net"></p>
+  <label class="check small"><input type="checkbox" id="map-check"> Procurar atualização do mapa ao abrir</label>
+</footer>
+
 <div id="undo" class="toast" role="status" hidden></div>
 <dialog id="copy-fallback">
   <form method="dialog">
@@ -203,7 +222,8 @@
 </dialog>
 <p id="live" class="sr" aria-live="polite"></p>
 <div id="print-area" aria-hidden="true"></div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="/static/vendor/leaflet/leaflet.js"></script>
+<script src="/static/vendor/protomaps/protomaps-leaflet.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

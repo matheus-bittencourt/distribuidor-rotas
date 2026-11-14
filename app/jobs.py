@@ -53,6 +53,13 @@ def get(job_id: str) -> Job | None:
         return _JOBS.get(job_id)
 
 
+def count() -> int:
+    """Quantos processamentos (com dados de entrega) estão na memória agora."""
+    with _LOCK:
+        _purge()
+        return len(_JOBS)
+
+
 def delete(job_id: str) -> bool:
     with _LOCK:
         return _JOBS.pop(job_id, None) is not None

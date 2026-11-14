@@ -6,7 +6,44 @@ entre N entregadores **por zonas de Porto Alegre** e ordena cada rota. Partida e
 
 Nenhuma parte exige conta paga ou chave de API.
 
-## Como rodar
+## Uso isolado (pen drive) — recomendado para dados reais
+
+O executável roda **só no computador onde é aberto, sem instalar nada e sem enviar nenhum dado**:
+
+1. Baixe `DistribuidorRotas-windows.zip` na página de [Releases](https://github.com/matheus-bittencourt/distribuidor-rotas/releases)
+   e extraia a pasta no pen drive. Ela já traz o mapa offline mais recente.
+2. Abra `DistribuidorRotas.exe`. O navegador abre em `http://127.0.0.1:8765` (só nesta máquina).
+   Na primeira vez, o Windows pode avisar que o programa não é assinado: “Mais informações” → “Executar assim mesmo”.
+3. Fechar a janela preta encerra o app e apaga da memória tudo o que foi carregado.
+
+O que garante o isolamento:
+
+| Proteção | Como |
+|---|---|
+| Nenhuma conexão para fora | Bloqueio no nível do sistema (`app/netguard.py`): resolução de nomes e conexões para qualquer endereço que não seja o próprio computador falham, para qualquer biblioteca. Tentativas aparecem no log. |
+| Endereços achados sem internet | Índice de ruas e números de Porto Alegre do OpenStreetMap, dentro do pacote de mapa (`app/localgeo.py`). |
+| Rotas por ruas sem servidor | Malha viária do pacote de mapa + Dijkstra do scipy (`app/router.py`). Tempos e km ficaram a 1% do OSRM. |
+| Fundo do mapa local | Recorte de Porto Alegre do mapa vetorial do Protomaps, servido pelo próprio app. |
+| Nada gravado em disco | A lista fica só na memória (o envio do arquivo não usa arquivo temporário) e as respostas não entram no cache do navegador. Executável em pasta, não em arquivo único (que se descompactaria em `%TEMP%`). |
+| Única saída: atualização do mapa | Ao abrir, **antes** de qualquer lista ser carregada, o app baixa um manifesto assinado do GitHub. Nada sobre as entregas é enviado. Desligue em “Procurar atualização do mapa ao abrir” no rodapé. |
+
+### Atualização do mapa
+
+Todo mês uma automação (`.github/workflows/mapa.yml`) gera o pacote a partir do OpenStreetMap, assina com
+Ed25519 e publica nos releases (`mapa-AAAA.MM.DD` + o canal fixo `mapa-atual`). Ao abrir, o app mostra
+**“Existe uma atualização do mapa disponível”** e o botão **Baixar**. O download é retomável, só é usado
+se a assinatura e o SHA-256 conferem, a troca é atômica e a versão anterior fica guardada.
+Sem internet ou com a verificação desligada: copie a pasta `mapa` de outro pen drive atualizado.
+
+### Limites do modo offline
+
+- **Números de casa:** o OpenStreetMap tem números em poucas ruas de Porto Alegre. Fora delas o ponto é o
+  meio da rua e aparece como “aproximado” (a ordem das paradas continua valendo). Ruas com o mesmo nome em
+  bairros diferentes são desempatadas pelo bairro do endereço; sem bairro, pela numeração (métrica).
+- **Sem trânsito:** tempos de rua livre, como no OSRM.
+- **PDF / texto livre:** sem IA no executável; planilhas e CSV no formato modelo não precisam dela.
+
+## Como rodar (desenvolvimento)
 
 ```bash
 python -m venv .venv

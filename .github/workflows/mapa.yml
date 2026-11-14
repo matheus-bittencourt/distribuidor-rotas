@@ -1,0 +1,57 @@
+# Gera, assina e publica o pacote de mapa offline de Porto Alegre.
+# Todo dia 3 de cada mês (e sob demanda). O app instalado vê a versão nova pelo manifesto em "mapa-atual".
+name: Pacote de mapa
+
+on:
+  schedule:
+    - cron: "0 6 3 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mapa
+  cancel-in-progress: false
+
+jobs:
+  mapa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Dependências do gerador
+        run: pip install osmium pmtiles numpy scipy httpx cryptography
+
+      - name: Baixar o OpenStreetMap do Sul do Brasil (Geofabrik)
+        run: |
+          mkdir -p osm
+          curl -fsSL --retry 5 -o osm/sul-latest.osm.pbf https://download.geofabrik.de/south-america/brazil/sul-latest.osm.pbf
+          curl -fsSL --retry 5 -o osm/sul-latest.osm.pbf.md5 https://download.geofabrik.de/south-america/brazil/sul-latest.osm.pbf.md5
+          cd osm && md5sum -c sul-latest.osm.pbf.md5
+
+      - name: Gerar o pacote
+        run: python scripts/build_mapdata.py --pbf osm/sul-latest.osm.pbf --out dist/mapa
+
+      - name: Empacotar e assinar
+        env:
+          MAPA_SIGNING_KEY: ${{ secrets.MAPA_SIGNING_KEY }}
+        run: python scripts/package_mapdata.py dist/mapa --out dist/release
+
+      - name: Publicar
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER=$(python -c "import json;print(json.load(open('dist/mapa/info.json'))['version'])")
+          NOTES="Pacote de mapa offline de Porto Alegre ($VER): malha viária, índice de endereços e fundo do mapa. Dados © colaboradores do OpenStreetMap (ODbL); fundo do mapa Protomaps."
+          gh release view "mapa-$VER" >/dev/null 2>&1 || gh release create "mapa-$VER" --title "Mapa $VER" --notes "$NOTES" --latest=false
+          gh release upload "mapa-$VER" dist/release/mapa-$VER.zip --clobber
+          # canal fixo que o app consulta: manifesto assinado apontando para a versão nova
+          gh release view mapa-atual >/dev/null 2>&1 || gh release create mapa-atual --title "Mapa: versão atual" \
+            --notes "Manifesto assinado da versão mais recente do pacote de mapa (lido pelo app)." --latest=false
+          gh release upload mapa-atual dist/release/manifest.json dist/release/manifest.sig --clobber

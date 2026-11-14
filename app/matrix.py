@@ -86,6 +86,17 @@ def osrm_paths(routes: list[list[tuple[float, float]]], base_url: str | None = N
 
 def build_matrix(coords: np.ndarray) -> tuple[np.ndarray, np.ndarray, str]:
     """(tempos em s, distâncias em m, origem dos números)."""
+    if SETTINGS.matrix == "local":
+        try:
+            from . import mapdata
+            T, D, ok = mapdata.router().matrix(coords)
+            est_t, est_d = estimated_matrix(coords), estimated_dist_m(coords)
+            # par sem caminho na malha (ponto isolado): mantém a estimativa por linha reta
+            t = np.where(ok, np.rint(np.where(ok, T, 0)), est_t).astype(np.int64)
+            d = np.where(ok, np.rint(np.where(ok, D, 0)), est_d).astype(np.int64)
+            return t, d, "ruas"
+        except Exception:
+            return estimated_matrix(coords), estimated_dist_m(coords), "estimativa (mapa offline indisponível)"
     if SETTINGS.matrix == "osrm":
         try:
             t, d = osrm_matrix(coords)

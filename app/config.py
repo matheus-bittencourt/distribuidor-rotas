@@ -33,7 +33,15 @@ def _i(name: str, default: int) -> int:
 class Settings:
     # Extração
     claude_model: str = os.environ.get("CLAUDE_MODEL", "claude-opus-5-5")
-    # Geocodificação: nominatim | google | fake
+    # Modo isolado: nenhuma conexão sai do computador (só o canal de atualização do mapa, antes de abrir uma lista)
+    offline: bool = os.environ.get("OFFLINE", "0") == "1"
+    # Pacote de mapa offline (malha viária, endereços, fundo do mapa); vazio = pasta 'mapa' ao lado do app
+    mapdata_dir: str = os.environ.get("MAPDATA_DIR", "")
+    # Canal de atualização do mapa: manifesto assinado publicado nos releases do GitHub
+    update_manifest_url: str = os.environ.get(
+        "UPDATE_MANIFEST_URL",
+        "https://github.com/matheus-bittencourt/distribuidor-rotas/releases/download/mapa-atual/manifest.json")
+    # Geocodificação: local (pacote de mapa, sem rede) | nominatim | google | cache | fake
     geocoder: str = os.environ.get("GEOCODER", "nominatim")
     # GEOCODER=cache: lê endereço->coordenadas de um CSV local (query;lat;lon;precisao), sem rede
     geocache: str = os.environ.get("GEOCACHE", "data/geocache.csv")
@@ -41,7 +49,7 @@ class Settings:
     nominatim_rate: float = _f("NOMINATIM_RATE", 1.0)  # requisições/s (1 = política do servidor público)
     nominatim_user_agent: str = os.environ.get("NOMINATIM_USER_AGENT", "distribuidor-rotas-poc")
     google_api_key: str = os.environ.get("GOOGLE_MAPS_API_KEY", "")
-    # Matriz de tempos: haversine | osrm
+    # Matriz de tempos: local (pacote de mapa, sem rede) | osrm | haversine
     matrix: str = os.environ.get("MATRIX", "haversine")
     osrm_url: str = os.environ.get("OSRM_URL", "http://localhost:5000")
     osrm_block: int = _i("OSRM_BLOCK", 100)     # pontos de origem e de destino por requisição (limite do servidor: 200 no total)

@@ -23,6 +23,9 @@ from .config import FALLBACK_DEPOT, RMPA_CITIES, SETTINGS
 from .extract import COLUMN_LABELS, NeedMapping, extract, llm_provider, to_query
 from .geocode import geocode_stops, in_metro, in_region, make_geocoder
 from .links import build_links
+from starlette.formparsers import MultiPartParser
+
+from . import mapdata, netguard, updater
 from .matrix import build_matrix, osrm_paths
 from .sanitize import is_sensitive_header, strip_accents
 from .solver import solve
@@ -31,6 +34,23 @@ STATIC = Path(__file__).parent / "static"
 MAX_UPLOAD = 25 * 1024 * 1024
 
 app = FastAPI(title="Distribuidor de rotas (POC)")
+
+if SETTINGS.offline:
+    netguard.install()   # modo isolado: nenhuma conexão sai deste computador
+
+# Arquivo enviado fica só na memória (o padrão do Starlette grava em disco acima de 1 MB).
+MultiPartParser.spool_max_size = MAX_UPLOAD + 1024 * 1024
+
+
+@app.middleware("http")
+async def no_store(request, call_next):
+    """Respostas com dados de entrega não ficam no cache do navegador."""
+    resp = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
 class FreshStatic(StaticFiles):
     """Arquivos da interface sempre revalidados: quem testa e edita não fica preso a uma versão antiga."""
 
@@ -109,7 +129,46 @@ def config():
         "job_ttl_minutes": SETTINGS.job_ttl_minutes,
         "saved_formats": len(templates.all_templates()),
         "column_labels": COLUMN_LABELS,
+        "offline": SETTINGS.offline,
+        "basemap": mapdata.basemap_path() is not None,
     }
+
+
+# ------------------------------------------------------------------ pacote de mapa e atualização
+
+class MapPrefIn(BaseModel):
+    verificar: bool
+
+
+@app.get("/api/mapa")
+def map_status():
+    return updater.status()
+
+
+@app.post("/api/mapa/verificar")
+def map_check(force: bool = False):
+    return updater.check(force=force)
+
+
+@app.post("/api/mapa/baixar")
+def map_download():
+    try:
+        return updater.start_download()
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+
+
+@app.post("/api/mapa/preferencia")
+def map_pref(body: MapPrefIn):
+    return updater.set_check(body.verificar)
+
+
+@app.get("/mapa/basemap.pmtiles")
+def basemap():
+    p = mapdata.basemap_path()
+    if not p:
+        raise HTTPException(404, "Fundo do mapa não instalado.")
+    return FileResponse(p, media_type="application/octet-stream", headers={"Cache-Control": "no-cache"})
 
 
 # ------------------------------------------------------------------ ingestão
@@ -362,12 +421,16 @@ def _run_solve(job: jobs.Job, req: SolveIn) -> None:
                 "links": build_links([(v[0].lat, v[0].lon) for v in seq], depot,
                                      per_link=SETTINGS.maps_waypoints_per_link),
             })
-        # Trajeto por ruas para o mapa (só com OSRM; sem ele o mapa liga as paradas em linha reta).
-        if method["v"] == "osrm":
+        # Trajeto por ruas para o mapa (OSRM ou malha offline; na estimativa, linhas retas entre as paradas).
+        if method["v"] in ("osrm", "ruas"):
             job.message = "Traçando o trajeto por ruas"
             pts = [[(d["start"]["lat"], d["start"]["lon"]), *((s["lat"], s["lon"]) for s in d["stops"]), depot]
                    if d["stops"] else [] for d in drivers_out]
-            for d, p in zip(drivers_out, osrm_paths(pts)):
+            try:
+                paths = osrm_paths(pts) if method["v"] == "osrm" else mapdata.router().paths(pts)
+            except Exception:
+                paths = [None] * len(pts)
+            for d, p in zip(drivers_out, paths):
                 d["path"] = p
         shares = [(d["main_zone_share"], d["count"]) for d in drivers_out if d["count"]]
         job.result = {

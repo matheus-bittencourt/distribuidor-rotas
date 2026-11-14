@@ -144,6 +144,95 @@ async function init() {
   updatePlan();
   const saved = (() => { try { return sessionStorage.getItem(JOB_KEY); } catch { return null; } })();
   if (saved) await restore(saved);
+  mapInit();
+}
+
+// ------------------------------------------------------------------ pacote de mapa: versão e atualização
+// A verificação só acontece sem lista aberta e só baixa o manifesto: nenhum dado de entrega sai daqui.
+const fmtMB = (b) => `${Math.max(1, Math.round(b / 1e6))} MB`;
+const fmtVer = (v) => { const m = /^(\d{4})\.(\d{2})\.(\d{2})/.exec(v || ""); return m ? `${m[3]}/${m[2]}/${m[1]}` : v || ""; };
+const LATER_KEY = "distribuidor.mapa.depois";
+
+function renderFoot(s) {
+  const i = s.installed;
+  $("foot-map").textContent = i ? `Mapa offline: dados de ${fmtVer(i.version)} · © colaboradores do OpenStreetMap` : "Mapa offline não instalado";
+  const net = $("foot-net"); net.replaceChildren();
+  if (s.isolated) net.append(el("span", { class: "on" }, "Modo isolado ativo"), ": nenhuma conexão sai deste computador");
+  else net.append("Modo de desenvolvimento: conexões externas permitidas");
+  $("map-check").checked = !!s.prefs.verificar_mapa;
+}
+
+function banner({ title, detail = "", kind = "", go = null, goLabel = "Baixar", later = true, meter = null }) {
+  const b = $("map-update");
+  b.className = "banner" + (kind ? ` ${kind}` : "");
+  $("map-update-title").textContent = title; $("map-update-detail").textContent = detail;
+  $("map-update-go").hidden = !go; $("map-update-go").lastChild.textContent = ` ${goLabel}`; $("map-update-go").onclick = go;
+  $("map-update-later").hidden = !later;
+  $("map-update-meter").hidden = meter == null;
+  if (meter != null) $("map-update-meter").firstElementChild.style.width = `${Math.round(meter * 100)}%`;
+  b.hidden = false;
+}
+
+async function mapInit() {
+  $("map-update-later").addEventListener("click", () => { $("map-update").hidden = true; try { sessionStorage.setItem(LATER_KEY, "1"); } catch {} });
+  $("map-check").addEventListener("change", async (e) => {
+    await post("/api/mapa/preferencia", { verificar: e.target.checked }).catch(() => {});
+    announce(e.target.checked ? "O app vai procurar atualização do mapa ao abrir" : "O app não vai mais procurar atualização do mapa");
+  });
+  let s;
+  try { s = await api("/api/mapa"); } catch { return; }
+  renderFoot(s);
+  const later = (() => { try { return sessionStorage.getItem(LATER_KEY); } catch { return null; } })();
+  if (!s.installed && (!s.prefs.verificar_mapa || state.job)) {
+    return banner({ title: "Mapa offline não instalado", kind: "err", later: false,
+      detail: "Sem ele, ruas e endereços não são encontrados. Ative “Procurar atualização do mapa ao abrir” e reabra o app com internet, ou copie a pasta “mapa” de outro computador." });
+  }
+  if (state.job || !s.prefs.verificar_mapa || later) return;
+  const c = await post("/api/mapa/verificar", {}).catch(() => null);
+  if (!c) return;
+  if (c.state === "available") {
+    const first = !s.installed;
+    banner({
+      title: first ? "Baixe o mapa offline para começar" : "Existe uma atualização do mapa disponível",
+      detail: first ? `Ruas e endereços de Porto Alegre, ${fmtMB(c.size)}. Depois disso o app funciona sem internet.`
+        : `Dados de ${fmtVer(c.version)}, ${fmtMB(c.size)}. O mapa atual (${fmtVer(c.installed)}) continua valendo até terminar.`,
+      go: downloadMap, goLabel: first ? "Baixar mapa" : "Baixar", later: !first,
+    });
+  } else if (!s.installed) {
+    banner({ title: "Mapa offline não instalado", kind: "err", later: false,
+      detail: c.state === "offline" ? "Sem conexão para baixar agora. Conecte à internet e reabra o app, ou copie a pasta “mapa” de outro computador."
+        : `Não foi possível conferir o mapa disponível (${c.detail || c.state}). Tente reabrir o app.` });
+  }
+}
+
+async function downloadMap() {
+  $("map-update-go").disabled = true;
+  try { await post("/api/mapa/baixar", {}); } catch (e) {
+    $("map-update-go").disabled = false;
+    return banner({ title: "Não foi possível baixar o mapa", detail: e.message, kind: "err", go: downloadMap, goLabel: "Tentar de novo" });
+  }
+  for (;;) {
+    const s = await api("/api/mapa").catch(() => null);
+    const d = s?.download || {};
+    if (d.state === "downloading") {
+      const f = d.total ? d.done / d.total : 0;
+      banner({ title: "Baixando o mapa…", detail: `${fmtMB(d.done)} de ${fmtMB(d.total)}. Pode continuar usando o app.`, meter: f, later: false });
+    } else if (d.state === "verifying" || d.state === "installing") {
+      banner({ title: "Conferindo a assinatura e instalando…", detail: "O mapa só é usado se a assinatura e o conteúdo conferem.", meter: 1, later: false });
+    } else if (d.state === "done") {
+      renderFoot(s); $("map-update-go").disabled = false;
+      banner({ title: `Mapa atualizado: dados de ${fmtVer(d.version)}`, kind: "ok", later: false,
+        detail: "As próximas rotas já usam o mapa novo. A versão anterior fica guardada." });
+      announce("Mapa atualizado");
+      if (state.cfg) state.cfg.basemap = true;
+      setTimeout(() => { $("map-update").hidden = true; }, 8000);
+      return;
+    } else if (d.state === "error") {
+      $("map-update-go").disabled = false;
+      return banner({ title: "O download do mapa falhou", detail: `${d.detail || "Erro desconhecido"}. O mapa atual continua valendo.`, kind: "err", go: downloadMap, goLabel: "Tentar de novo" });
+    }
+    await sleep(700);
+  }
 }
 
 // Recarregar a página não perde o resultado: o servidor guarda o processamento por até 2 h.
@@ -616,8 +705,14 @@ function decodePolyline(s) {
 
 function drawMap(r) {
   if (!state.map) {
-    state.map = L.map("map", { preferCanvas: true });
-    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(state.map);
+    state.map = L.map("map", { preferCanvas: true, maxZoom: 18 });
+    const attribution = '© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a>';
+    // Fundo do mapa: o do pacote offline; sem ele, o servidor do OSM (só fora do modo isolado).
+    if (state.cfg.basemap && window.protomapsL) {
+      protomapsL.leafletLayer({ url: "/mapa/basemap.pmtiles", flavor: "light", lang: "pt", maxDataZoom: 15, attribution: `${attribution} · Protomaps` }).addTo(state.map);
+    } else if (!state.cfg.offline) {
+      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution }).addTo(state.map);
+    }
   }
   state.routes.forEach((o) => o.layers.forEach((l) => l.remove())); state.routes = [];
   const all = [[r.depot.lat, r.depot.lon]];

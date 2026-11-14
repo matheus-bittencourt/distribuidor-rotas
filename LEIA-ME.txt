@@ -1,0 +1,23 @@
+DISTRIBUIDOR DE ROTAS - uso no pen drive
+========================================
+
+1. Abra DistribuidorRotas.exe.
+   O navegador abre sozinho em http://127.0.0.1:8765 (o app roda só neste computador).
+   Se o Windows avisar que o programa não é assinado: "Mais informações" > "Executar assim mesmo".
+
+2. Envie a lista do dia, informe os entregadores e calcule as rotas.
+
+3. Para encerrar, feche a janela preta. A lista, os nomes e os endereços ficam só na memória
+   e somem quando o app fecha. Nada é gravado no pen drive nem no computador.
+
+ISOLAMENTO
+- Nenhuma conexão sai deste computador enquanto o app está aberto.
+- A única exceção é a busca de atualização do mapa: acontece ao abrir, antes de qualquer lista ser
+  carregada, e só baixa um arquivo assinado do GitHub. Nada sobre as entregas é enviado.
+  Para desligar: desmarque "Procurar atualização do mapa ao abrir", no rodapé da tela.
+
+MAPA
+- A pasta "mapa" guarda as ruas, os números de casa e o fundo do mapa de Porto Alegre.
+- Atualizar sem internet: copie a pasta "mapa" de outro pen drive já atualizado por cima desta.
+
+Dados do mapa (c) colaboradores do OpenStreetMap (ODbL). Fundo do mapa: Protomaps.

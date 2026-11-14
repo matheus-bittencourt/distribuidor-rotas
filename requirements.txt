@@ -9,3 +9,4 @@ ortools>=9.10
 numpy>=1.26
 scipy>=1.11
 pytest>=8.0
+cryptography>=43
