@@ -20,6 +20,7 @@
     <symbol id="i-map" viewBox="0 0 24 24"><path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11z"/><circle cx="12" cy="10" r="2.5"/></symbol>
     <symbol id="i-print" viewBox="0 0 24 24"><path d="M7 9V4h10v5M7 17H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2"/><rect x="7" y="14" width="10" height="6"/></symbol>
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 1 3.3 6.5L4 20l1.4-3.6A7.9 7.9 0 0 1 4 12z"/><path d="M9 11h6M9 14h4"/></symbol>
   </defs>
 </svg>
 
@@ -135,7 +136,7 @@
     </label>
 
     <label class="field" for="drivers">Entregadores, um por linha
-      <span class="hint">Só o nome: sai do ponto padrão. <code>Nome; endereço ou lat, lon</code>: sai de casa. Todos chegam ao ponto de chegada.</span>
+      <span class="hint">Só o nome: sai do ponto padrão. <code>Nome; endereço ou lat, lon</code>: sai de casa. Todos chegam ao ponto de chegada. Com telefone (<code>Nome; 51 99999-0000</code>), o app abre a conversa do WhatsApp já com a mensagem; o telefone fica só neste navegador.</span>
     </label>
     <textarea id="drivers" rows="6" spellcheck="false" placeholder="Ana&#10;Bruno; Rua Exemplo, 100, Bairro, Porto Alegre&#10;Carla; -30.0500, -51.1800"></textarea>
     <div class="actions tight">
@@ -210,7 +211,7 @@
       <div class="sendbar-status">
         <strong id="sent-count"></strong>
         <div class="meter" aria-hidden="true"><i id="sent-meter"></i></div>
-        <span class="muted">Cada entregador recebe duas mensagens, nesta ordem: a rota e depois os links do Maps. Atalho: tecla <kbd>C</kbd>.</span>
+        <span class="muted">Cada entregador recebe duas mensagens, nesta ordem: a rota e depois os links do Maps. Com telefone na lista de entregadores, o botão abre a conversa já com a mensagem. Atalho: tecla <kbd>C</kbd>.</span>
         <p class="sent-last" id="sent-last" role="status"></p>
       </div>
       <div class="sendbar-actions">

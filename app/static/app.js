@@ -126,6 +126,7 @@ async function init() {
 
   ["balance", "zone", "balance-by"].forEach((id) => $(id).addEventListener("input", () => { state.fromPrefs = false; }));
   ["balance", "zone", "balance-by", "drivers", "depot", "tolerance", "km-tol"].forEach((id) => $(id).addEventListener("input", updatePlan));
+  $("drivers").addEventListener("change", refreshPhones);
   // menu "Mais" fecha ao clicar fora ou com Esc
   document.addEventListener("click", (e) => document.querySelectorAll("details.more[open]").forEach((d) => { if (!d.contains(e.target)) d.open = false; }));
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") document.querySelectorAll("details.more[open]").forEach((d) => { d.open = false; d.querySelector("summary").focus(); }); });
@@ -466,15 +467,28 @@ async function sendMapping() {
 }
 
 // ------------------------------------------------------------------ etapa 2: entregadores
+// Telefone do entregador (opcional): só dígitos com DDI 55. Fica no navegador; nunca vai ao servidor.
+function phoneOf(part) {
+  if (!/^\+?[\d\s().-]+$/.test(part)) return null;
+  let d = part.replace(/\D/g, "");
+  if (d.length === 10 || d.length === 11) d = "55" + d;
+  return d.length >= 12 && d.length <= 13 ? d : null;
+}
 function parseDrivers() {
   return $("drivers").value.split("\n").map((l) => l.trim()).filter(Boolean).map((line, i) => {
-    const [label, ...rest] = line.split(";");   // "Nome" sozinho = sai do ponto padrão
-    const where = rest.join(";").trim();
+    // "Nome" sozinho = sai do ponto padrão; "Nome; endereço ou lat, lon; telefone" (cada parte opcional)
+    const [label, ...rest] = line.split(";").map((s) => s.trim());
+    let phone = null;
+    const parts = rest.filter((p) => { const ph = p && phoneOf(p); if (ph && !phone) { phone = ph; return false; } return !!p; });
+    const where = parts.join("; ");
     const m = where.match(/^(-?\d{1,2}[.,]\d+)\s*[,; ]\s*(-?\d{1,3}[.,]\d+)$/);
     const start = !where ? {} : m ? { lat: parseFloat(m[1].replace(",", ".")), lon: parseFloat(m[2].replace(",", ".")) } : { address: where };
-    return { label: label.trim() || `Entregador ${i + 1}`, start };
+    return { label: label || `Entregador ${i + 1}`, start, phone };
   });
 }
+// Telefones por nome, lidos da lista atual (vale também para um resultado restaurado).
+const phoneByLabel = () => Object.fromEntries(parseDrivers().filter((d) => d.phone).map((d) => [d.label, d.phone]));
+const waUrl = (phone, text) => `https://wa.me/${phone}?text=${encodeURIComponent(text)}`;
 // Tolerância por entrega, em minutos inteiros (0 a 30).
 const defaultToleranceMin = () => Math.round((state.cfg.delivery_tolerance_seconds ?? 60) / 60);
 const toleranceMin = () => Math.max(0, Math.min(30, Math.round(parseFloat($("tolerance").value) || 0)));
@@ -539,7 +553,8 @@ function updatePlan() {
   const preset = PRESETS[document.querySelector('input[name="preset"]:checked')?.value];
   const how = preset ? preset.label : `igualar ${BY_LABEL[by]} · ${pct(b)} · zonas ${pct(z)}${kt !== null ? ` · km ±${Math.round(kt * 100)}%` : ""}`;
   $("adv-summary").textContent = `${how} · folga ${tol} min${state.fromPrefs ? " · da última vez" : ""}`;
-  $("drivers-count").textContent = d.length ? `${d.length} entregador${d.length > 1 ? "es" : ""}${home ? ` · ${home} saem de casa` : ""}` : "";
+  const tel = d.filter((x) => x.phone).length;
+  $("drivers-count").textContent = d.length ? `${d.length} entregador${d.length > 1 ? "es" : ""}${home ? ` · ${home} ${home > 1 ? "saem" : "sai"} de casa` : ""}${tel ? ` · ${tel} com WhatsApp` : ""}` : "";
   const stops = state.okCount ? `${state.okCount} entregas` : "entregas";
   $("plan").textContent = !state.okCount ? "Nenhuma entrega localizada ainda: resolva os endereços para revisar."
     : !d.length ? "Informe pelo menos um entregador."
@@ -595,10 +610,16 @@ async function solve() {
   tick(); const timer = setInterval(tick, 1000);
   try {
     await post(`/api/jobs/${state.job}/solve`, {
-      depot: { address: $("depot").value.trim() }, drivers, balance: parseFloat($("balance").value),
+      // o telefone fica só no navegador: o servidor recebe nome e partida
+      depot: { address: $("depot").value.trim() }, drivers: drivers.map(({ label, start }) => ({ label, start })), balance: parseFloat($("balance").value),
       balance_by: $("balance-by").value, zone_weight: parseFloat($("zone").value),
       tolerance_seconds: toleranceMin() * 60, km_tolerance: kmTolerance(),
     });
+    try {   // lembra com qual predefinição este cálculo foi feito (para o veredito e para um recarregamento)
+      const m = JSON.parse(sessionStorage.getItem(PRESET_KEY) || "{}");
+      m[state.job] = document.querySelector('input[name="preset"]:checked')?.value || "custom";
+      sessionStorage.setItem(PRESET_KEY, JSON.stringify(m));
+    } catch {}
     await awaitResult();
     setStatus("s2status", "");
   } catch (e) { setStatus("s2status", e.message, "err"); }
@@ -637,20 +658,24 @@ function markCopied(btn, label) {
   btn.classList.add("done");
   btn.replaceChildren(icon("check"), " ", label, ...(btn.dataset.who ? [el("span", { class: "sr" }, ` de ${btn.dataset.who}`)] : []));
 }
-function unmarkCopied(btn, label) {
+function unmarkCopied(btn, label, ico = "copy") {
   btn.classList.remove("done");
-  btn.replaceChildren(icon("copy"), " ", label, el("span", { class: "sr" }, ` de ${btn.dataset.who}`));
+  btn.replaceChildren(icon(ico), " ", label, el("span", { class: "sr" }, ` de ${btn.dataset.who}`));
 }
+// Rótulos dependem de haver telefone: "WhatsApp: rota" abre a conversa; "Copiar rota" só copia.
 function refreshSent(i) {
   const row = document.querySelector(`.driver[data-i="${i}"]`); if (!row) return;
-  const st = state.sent[i], chip = row.querySelector(".chip.sent");
-  st.rota ? markCopied(row.querySelector(".copy-rota"), "Rota copiada") : unmarkCopied(row.querySelector(".copy-rota"), "Copiar rota");
-  st.links ? markCopied(row.querySelector(".copy-links"), "Links copiados") : unmarkCopied(row.querySelector(".copy-links"), "Copiar links");
+  const st = state.sent[i], chip = row.querySelector(".chip.sent"), wa = !!state.phones?.[state.result.drivers[i].label];
+  st.rota ? markCopied(row.querySelector(".copy-rota"), wa ? "Rota aberta" : "Rota copiada")
+    : unmarkCopied(row.querySelector(".copy-rota"), wa ? "WhatsApp: rota" : "Copiar rota", wa ? "chat" : "copy");
+  st.links ? markCopied(row.querySelector(".copy-links"), wa ? "Links abertos" : "Links copiados")
+    : unmarkCopied(row.querySelector(".copy-links"), wa ? "WhatsApp: links" : "Copiar links", wa ? "chat" : "copy");
   chip.hidden = !(st.rota && st.links);
 }
 
 // ---- marcações de "copiado" sobrevivem a um recarregamento (só nesta aba; somem ao apagar ou recalcular)
 const SENT_KEY = "distribuidor.copiados.v1";
+const PRESET_KEY = "distribuidor.predefinicao.v1";
 const resultSig = (r) => [state.job, r.deliveries, r.total_min, ...r.drivers.map((d) => d.stops[0]?.id ?? "")].join("|");
 function saveSent() { try { sessionStorage.setItem(SENT_KEY, JSON.stringify({ sig: state.sig, sent: state.sent })); } catch {} }
 function loadSent(r) {
@@ -666,8 +691,10 @@ const KIND = { rota: ["Rota", "copiada"], links: ["Links", "copiados"] };
 function showLastCopy(i, kind) {
   const who = state.result.drivers[i].label, [what, done] = KIND[kind];
   state.lastCopy = { i, kind };
-  $("sent-last").replaceChildren(icon("check"), ` ${what} de ${who} ${done}. Cole na conversa de ${who}. `,
-    el("button", { class: "link", onclick: undoLastCopy }, "Desfazer"));
+  const msg = state.phones?.[who]
+    ? ` ${what} de ${who} aberta no WhatsApp: confira e toque em enviar. Se o texto chegar cortado, cole (também foi copiado). `
+    : ` ${what} de ${who} ${done}. Cole na conversa de ${who}. `;
+  $("sent-last").replaceChildren(icon("check"), msg, el("button", { class: "link", onclick: undoLastCopy }, "Desfazer"));
 }
 function undoLastCopy() {
   const lc = state.lastCopy; if (!lc) return;
@@ -676,11 +703,16 @@ function undoLastCopy() {
   $("sent-last").textContent = `Marcação desfeita: ${KIND[lc.kind][0].toLowerCase()} de ${state.result.drivers[lc.i].label} volta para a fila.`;
   announce($("sent-last").textContent);
 }
+// Com telefone: abre a conversa do entregador no WhatsApp já com a mensagem (e copia também, caso o
+// WhatsApp corte um texto longo). Sem telefone: só copia, para colar.
 async function copyKind(i, kind) {
-  const [what, done] = KIND[kind];
-  if (await copyText(state.texts[i][kind], `${what} de ${state.result.drivers[i].label} ${done}`)) {
-    state.sent[i][kind] = true; refreshSent(i); updateSendbar(); saveSent(); showLastCopy(i, kind);
-  }
+  const [what, done] = KIND[kind], who = state.result.drivers[i].label, phone = state.phones?.[who], text = state.texts[i][kind];
+  if (phone) {
+    window.open(waUrl(phone, text), "_blank", "noopener");   // dentro do clique: o navegador não bloqueia
+    try { await navigator.clipboard.writeText(text); } catch {}
+    announce(`${what} de ${who} aberta no WhatsApp`);
+  } else if (!(await copyText(text, `${what} de ${who} ${done}`))) return;
+  state.sent[i][kind] = true; refreshSent(i); updateSendbar(); saveSent(); showLastCopy(i, kind);
 }
 async function copyAll(kind, btn, doneLabel) {
   $("bulk").open = false;
@@ -735,14 +767,17 @@ function renderResult(r) {
   // Com tolerância de km, o km é avaliado contra a faixa (±t da média permite até 2t/(1+t) entre menor e maior).
   const kt = r.km_tolerance, kmAllowed = kt ? Math.round(((2 * kt) / (1 + kt)) * 100) : null;
   const worst = Math.max(kt ? 0 : spreads.km, spreads.entregas, spreads.tempo);
-  const kmOut = kt != null && spreads.km > kmAllowed;
+  // A margem de km só vira alerta quando o operador a escolheu (em "Personalizado"); nas predefinições
+  // ela é um ajuste interno do cálculo, e passar dela é informação, não problema.
+  const chosenMargin = (() => { try { return JSON.parse(sessionStorage.getItem(PRESET_KEY))?.[state.job] === "custom"; } catch { return false; } })();
+  const kmOut = kt != null && spreads.km > kmAllowed && chosenMargin;
   // A cor segue o pior critério: nada de verde ao lado de "fora da faixa".
   const verdictWord = worst <= 15 ? "bem equilibradas" : worst <= 30 ? "razoavelmente equilibradas" : "bem desiguais";
   const verdictKind = worst > 30 || kmOut ? "warn" : "ok";
 
   const notes = [
     `Tempos e km ${estimated ? "estimados em linha reta (sem as ruas)" : "calculados pelas ruas"}`,
-    `tempos com ${Math.round((r.tolerance_seconds ?? 0) / 60)} min de tolerância por entrega`,
+    `tempos com ${Math.round((r.tolerance_seconds ?? 0) / 60)} min de folga por entrega`,
     `${pct(r.zone_purity)} das paradas ficam na zona principal do entregador`,
   ];
   const multi = all.filter((s) => s.n_deliveries > 1).length;
@@ -770,7 +805,7 @@ function renderResult(r) {
     + (byStreet ? "Linhas seguem as ruas." : "Linhas retas, não as ruas.");
   $("csv-all").href = `/api/jobs/${state.job}/export.csv`;
   state.texts = dr.map((d) => ({ rota: routeText(d, r.depot.address), links: linksText(d) }));
-  state.result = r; state.sig = resultSig(r); state.lastCopy = null;
+  state.result = r; state.sig = resultSig(r); state.lastCopy = null; state.phones = phoneByLabel();
   const resumed = loadSent(r);
   state.sent = resumed || dr.map(() => ({ rota: false, links: false }));
   for (const [id, label] of [["copy-all-routes", "Copiar todas as rotas"], ["copy-all-links", "Copiar todos os links"]]) {
@@ -836,9 +871,17 @@ function updateSendbar() {
   $("sent-meter").style.width = `${n ? (msgs / (2 * n)) * 100 : 0}%`;   // avança a cada mensagem, não só a cada entregador
   const btn = $("copy-next");
   btn.disabled = !nx;
-  $("copy-next-label").textContent = nx
-    ? `Copiar ${nx.kind === "rota" ? "rota" : "links"} de ${state.result.drivers[nx.i].label}`
-    : "Tudo copiado";
+  const who = nx && state.result.drivers[nx.i].label, wa = nx && state.phones?.[who];
+  btn.querySelector("use").setAttribute("href", wa ? "#i-chat" : "#i-copy");
+  $("copy-next-label").textContent = !nx ? "Tudo copiado"
+    : wa ? `Abrir WhatsApp de ${who}: ${nx.kind === "rota" ? "rota" : "links"}`
+    : `Copiar ${nx.kind === "rota" ? "rota" : "links"} de ${who}`;
+}
+// Telefones editados na lista de entregadores valem na hora para a fila (sem recalcular).
+function refreshPhones() {
+  if (!state.result) return;
+  state.phones = phoneByLabel();
+  state.sent.forEach((_, i) => refreshSent(i)); updateSendbar();
 }
 // Clique duplo não pode copiar os links por cima da rota antes de ela ser colada.
 async function copyNext() {
@@ -867,7 +910,7 @@ function fillBody(body, d, mostApprox) {
     return el("tr", multi ? { class: "multi", style: `--span:${3 * s.n_deliveries}` } : {},
       el("td", { class: "num c-n" }, s.order, multi ? el("span", { class: "badge" }, `${s.n_deliveries}×`) : ""),
       cell("c-name", (x) => x.name, s.name), cell("c-addr", (x) => x.address, s.address), cell("c-code", (x) => x.code, s.code),
-      el("td", { class: "num c-leg" }, `+${Math.round(s.leg_min)} min · ${s.leg_km.toFixed(1)} km`),
+      el("td", { class: "num c-leg" }, `+${Math.round(s.leg_min)} min · ${s.leg_km.toFixed(1).replace(".", ",")} km`),
       el("td", { class: "num c-eta" }, fmtMin(s.eta_min)));
   });
   body.append(el("p", { class: "hint" }, "Links do Maps (abra na ordem):"), links,
