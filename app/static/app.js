@@ -79,7 +79,8 @@ function savePrefs() {
   try {
     localStorage.setItem(PREF_KEY, JSON.stringify({
       drivers: $("drivers").value, n: $("n-drivers").value, by: $("balance-by").value,
-      balance: $("balance").value, zone: $("zone").value, depot: $("depot").value, tol: $("tolerance").value,
+      balance: $("balance").value, zone: $("zone").value, depot: $("depot").value, v: 2,
+      tol: toleranceMin() === defaultToleranceMin() ? null : $("tolerance").value,
     }));
     show("saved-note");
   } catch { /* navegação privada: segue sem lembrar */ }
@@ -105,7 +106,7 @@ async function init() {
   $("depot").value = p.depot || state.cfg.default_depot;
   if (p.drivers) { $("drivers").value = p.drivers; show("saved-note"); }
   if (p.n) $("n-drivers").value = p.n;
-  $("tolerance").value = p.tol ?? Math.round((state.cfg.delivery_tolerance_seconds ?? 300) / 60);
+  $("tolerance").value = p.v === 2 && p.tol != null ? p.tol : defaultToleranceMin();
   if (p.by) $("balance-by").value = p.by;
   $("balance").value = p.balance ?? 0.7; $("zone").value = p.zone ?? state.cfg.zone_weight;
   state.fromPrefs = p.by != null || p.balance != null;
@@ -321,6 +322,7 @@ function parseDrivers() {
   });
 }
 // Tolerância por entrega, em minutos inteiros (0 a 30).
+const defaultToleranceMin = () => Math.round((state.cfg.delivery_tolerance_seconds ?? 60) / 60);
 const toleranceMin = () => Math.max(0, Math.min(30, Math.round(parseFloat($("tolerance").value) || 0)));
 const BY_WHAT = { stops: "o número de paradas", time: "o tempo de rota", km: "os km rodados" };
 // O valor da barra é uma proporção entre dois objetivos que puxam em direções opostas.

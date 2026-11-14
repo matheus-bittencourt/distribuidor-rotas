@@ -80,7 +80,7 @@ descartado) e o que a IA deixa passar cai na heurística.
 | `MATRIX` / `OSRM_URL` | `haversine` / `http://localhost:5000` | `osrm` calcula tempos reais por ruas. |
 | `ZONE_WEIGHT` | 0,5 | 0 = só proximidade; 1 = zonas mandam. |
 | `SERVICE_SECONDS` / `SOLVER_SECONDS` | 120 / 30 | Tempo por parada; orçamento de cálculo. |
-| `DELIVERY_TOLERANCE_SECONDS` | 300 | Folga somada a **cada entrega** no tempo parado (ajustável na tela, em "Ajustes da divisão"). Paradas com várias entregas recebem a folga de cada uma. |
+| `DELIVERY_TOLERANCE_SECONDS` | 60 | Folga somada a **cada entrega** no tempo parado (ajustável na tela, em "Ajustes da divisão"). Paradas com várias entregas recebem a folga de cada uma. |
 | `EXTRA_DELIVERY_SECONDS` | 45 | Tempo parado a mais por entrega adicional no mesmo ponto. |
 
 ## Limites conhecidos (leia antes de confiar)

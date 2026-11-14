@@ -103,7 +103,7 @@ def test_tolerance_is_added_per_delivery():
     assert (base["tolerance_seconds"], ten["tolerance_seconds"]) == (0, 600)
     # 3 entregas x 10 min a mais na rota (a ordem das paradas não muda com 2 pontos)
     assert ten["drivers"][0]["total_min"] - base["drivers"][0]["total_min"] == 30
-    # o padrão do servidor é 5 min por entrega
-    assert client.get("/api/config").json()["delivery_tolerance_seconds"] == 300
+    # o padrão do servidor é 1 min por entrega
+    assert client.get("/api/config").json()["delivery_tolerance_seconds"] == 60
     default = _solve_total(jid)
-    assert default["tolerance_seconds"] == 300 and default["drivers"][0]["total_min"] - base["drivers"][0]["total_min"] == 15
+    assert default["tolerance_seconds"] == 60 and default["drivers"][0]["total_min"] - base["drivers"][0]["total_min"] == 3
