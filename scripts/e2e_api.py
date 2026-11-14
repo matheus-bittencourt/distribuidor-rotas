@@ -65,7 +65,8 @@ def main():
     everything += [json.dumps(res), csv_text]
     print(f"cálculo {time.time() - t1:.1f}s | total={res['total_min'] / 60:.1f}h | tempos por {res['matrix']}")
 
-    ids = [s["id"] for d in res["drivers"] for s in d["stops"]]
+    # entregas no mesmo endereço viram uma parada só: confere pelas entregas, não pelas paradas
+    ids = [x["id"] for d in res["drivers"] for s in d["stops"] for x in s["deliveries"]]
     ok = j["counts"].get("ok", 0)
     assert len(ids) == len(set(ids)) == ok, (len(ids), len(set(ids)), ok)
     for d in res["drivers"]:

@@ -1,6 +1,8 @@
 """Matriz de tempos de deslocamento (segundos) entre pontos."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 import httpx
 import numpy as np
 
@@ -32,28 +34,31 @@ def osrm_matrix(coords: np.ndarray, base_url: str | None = None, block: int | No
     block = block or SETTINGS.osrm_block
     n = len(coords)
     dur, dist = estimated_matrix(coords).copy(), estimated_dist_m(coords).copy()
-    with httpx.Client(timeout=60) as client:
-        for i0 in range(0, n, block):
-            src = list(range(i0, min(i0 + block, n)))
-            for j0 in range(0, n, block):
-                dst = list(range(j0, min(j0 + block, n)))
-                idx = src + [j for j in dst if j not in src]
-                pos = {k: p for p, k in enumerate(idx)}
-                path = ";".join(f"{coords[k][1]:.6f},{coords[k][0]:.6f}" for k in idx)
-                params = {
-                    "sources": ";".join(str(pos[k]) for k in src),
-                    "destinations": ";".join(str(pos[k]) for k in dst),
-                    "annotations": "duration,distance",
-                }
-                r = client.get(f"{base_url}/table/v1/driving/{path}", params=params)
-                r.raise_for_status()
-                body = r.json()
-                for a, row_t, row_d in zip(src, body["durations"], body["distances"]):
-                    for b, t, d in zip(dst, row_t, row_d):
-                        if t is not None:  # sem rota: mantém a estimativa
-                            dur[a, b] = int(round(t))
-                        if d is not None:
-                            dist[a, b] = int(round(d))
+    def one(client, src, dst):
+        src_set = set(src)
+        idx = src + [j for j in dst if j not in src_set]
+        pos = {k: p for p, k in enumerate(idx)}
+        path = ";".join(f"{coords[k][1]:.6f},{coords[k][0]:.6f}" for k in idx)
+        params = {
+            "sources": ";".join(str(pos[k]) for k in src),
+            "destinations": ";".join(str(pos[k]) for k in dst),
+            "annotations": "duration,distance",
+        }
+        r = client.get(f"{base_url}/table/v1/driving/{path}", params=params)
+        r.raise_for_status()
+        return src, dst, r.json()
+
+    jobs = [(list(range(i0, min(i0 + block, n))), list(range(j0, min(j0 + block, n))))
+            for i0 in range(0, n, block) for j0 in range(0, n, block)]
+    # O OSRM atende várias requisições ao mesmo tempo (uma por núcleo): em paralelo fica várias vezes mais rápido.
+    with httpx.Client(timeout=120) as client, ThreadPoolExecutor(max_workers=SETTINGS.osrm_workers) as pool:
+        for src, dst, body in pool.map(lambda j: one(client, *j), jobs):
+            for a, row_t, row_d in zip(src, body["durations"], body["distances"]):
+                for b, t, d in zip(dst, row_t, row_d):
+                    if t is not None:  # sem rota: mantém a estimativa
+                        dur[a, b] = int(round(t))
+                    if d is not None:
+                        dist[a, b] = int(round(d))
     return dur, dist
 
 

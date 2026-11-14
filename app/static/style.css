@@ -234,8 +234,17 @@ td.num, th.num { text-align: right; white-space: nowrap; }
   .calcbar { margin: .75rem -1rem -1rem; padding: .75rem 1rem 1rem; }
 }
 @media (pointer: coarse) { .leaflet-bar a { width: 44px !important; height: 44px !important; line-height: 44px !important; } }
-/* mapa claro dentro de painel escuro: escurece só os tiles, não as rotas */
-@media (prefers-color-scheme: dark) { .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.92) contrast(.9); } }
+/* mapa sempre claro (tiles originais), mesmo com o app em tema escuro */
+.s3-map { position: relative; }
+.map-expand { position: absolute; top: .6rem; right: .6rem; z-index: 500; min-height: 36px; padding: .35rem .7rem; background: #fff; color: #1a1a1a; border: 1px solid #bbb; border-radius: 6px; box-shadow: 0 1px 4px rgb(0 0 0 / .3); font-size: .8125rem; cursor: pointer; }
+.map-expand:hover { background: #f0f0f0; }
+@media (pointer: coarse) { .map-expand { min-height: 44px; } }
+/* mapa expandido: ocupa a janela inteira */
+.s3-map.expanded { position: fixed; inset: 0; z-index: 2000; background: var(--bg, #fff); padding: .5rem; display: flex; flex-direction: column; }
+.s3-map.expanded #map { flex: 1; height: auto; border-radius: 0; }
+.s3-map.expanded .map-expand { top: 1rem; right: 1rem; }
+body.map-open { overflow: hidden; }
+@media print { .map-expand { display: none; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 
 /* ---- grupo de botões (WhatsApp: rota + links) */

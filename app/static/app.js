@@ -595,6 +595,15 @@ function fillBody(body, d, mostApprox) {
       el("tbody", {}, rows)));
 }
 
+function setMapExpanded(on) {
+  document.querySelector(".s3-map").classList.toggle("expanded", on);
+  document.body.classList.toggle("map-open", on);
+  const b = $("map-expand"); b.textContent = on ? "Fechar mapa (Esc)" : "Expandir mapa"; b.setAttribute("aria-pressed", on);
+  if (state.map) { setTimeout(() => state.map.invalidateSize(), 50); }
+}
+$("map-expand").addEventListener("click", () => setMapExpanded(!document.querySelector(".s3-map").classList.contains("expanded")));
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && document.body.classList.contains("map-open")) setMapExpanded(false); });
+
 function drawMap(r) {
   if (!state.map) {
     state.map = L.map("map", { preferCanvas: true });

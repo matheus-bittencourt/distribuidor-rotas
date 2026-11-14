@@ -68,6 +68,27 @@ O app detecta o Ollama sozinho (`LLM_PROVIDER=auto`). Tudo roda no seu computado
 Como modelos pequenos erram, cada resposta é conferida contra o texto da linha (endereço inventado é
 descartado) e o que a IA deixa passar cai na heurística.
 
+## Rotas por ruas (OSRM local, gratuito)
+
+Sem OSRM o app estima tempos e km por linha reta. Com o OSRM local, usa a malha viária real
+(mapa OpenStreetMap do Sul do Brasil). Requer Docker Desktop em execução.
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\setup_osrm.ps1          # 1ª vez: baixa o mapa (~400 MB), processa e sobe o servidor
+.\scripts\setup_osrm.ps1 -Start   # depois: só sobe o servidor
+$env:MATRIX = "osrm"              # e inicie o app normalmente
+```
+
+O servidor fica no container `osrm-poa` (`http://localhost:5000`, reinicia com o Docker). Os dados
+ficam em `osrm-data/` (fora do git). A matriz é pedida em blocos de `OSRM_BLOCK` × `OSRM_BLOCK` pontos,
+`OSRM_WORKERS` em paralelo; um par sem rota mantém a estimativa por linha reta.
+
+Medido com os 1400 endereços de teste (~960 pontos distintos) e 14 entregadores: matriz em ~30 s,
+cálculo completo em ~48 s. Em 150 pares reais, a distância por ruas deu ≈ 1,36 × a linha reta (o fator
+1,35 da estimativa está bem calibrado) e o tempo do OSRM ≈ 0,76 × o estimado (~37 km/h médios, **sem
+trânsito**; a estimativa assume 28 km/h).
+
 ## Configuração (`.env`)
 
 | Variável | Padrão | Para quê |
@@ -77,7 +98,8 @@ descartado) e o que a IA deixa passar cai na heurística.
 | `OLLAMA_URL` / `OLLAMA_MODEL` | `localhost:11434` / `qwen2.5:7b` | IA local. |
 | `GEOCODER` | `nominatim` | `nominatim`, `google` (pago, opcional) ou `fake` (testes). |
 | `NOMINATIM_URL` / `NOMINATIM_RATE` | servidor público / 1 req/s | Aponte para um Nominatim próprio e suba a taxa. |
-| `MATRIX` / `OSRM_URL` | `haversine` / `http://localhost:5000` | `osrm` calcula tempos reais por ruas. |
+| `MATRIX` / `OSRM_URL` | `haversine` / `http://localhost:5000` | `osrm` calcula tempos e km reais por ruas. |
+| `OSRM_BLOCK` / `OSRM_WORKERS` | 100 / 8 | Pontos de origem e de destino por requisição (o servidor aceita até 200 no total) e requisições simultâneas. |
 | `KM_TOLERANCE` | 0,15 | Faixa de km em torno da média (±15%); 0 = tentar igualar os km. Editável na tela. |
 | `ZONE_WEIGHT` | 0,10 | Peso das zonas, de 0 a 0,15 (teto fixo: valores maiores são cortados em 0,15). |
 | `SERVICE_SECONDS` / `SOLVER_SECONDS` | 120 / 30 | Tempo por parada; orçamento de cálculo. |
@@ -107,7 +129,7 @@ descartado) e o que a IA deixa passar cai na heurística.
 - **Km também são estimados** sem OSRM (linha reta × 1,35). Igualar km tem custo: nos 1400 endereços de
   teste a soma de km subiu ~14% e a quantidade de paradas passou a variar de 10 a 156 por entregador.
 - **Tempos por estimativa** sem OSRM (linha reta × 1,35 ÷ 28 km/h): bom para dividir regiões,
-  impreciso para ETA. O cliente OSRM está implementado, mas **não foi testado contra um servidor real**.
+  impreciso para ETA. Com OSRM os tempos vêm das ruas, mas **sem trânsito** (horário de pico demora mais).
 - **Ollama não testado com modelo real** (não está instalado aqui). O caminho foi testado com uma
   resposta simulada: extração correta, descarte de endereço inventado, queda para a heurística
   quando o servidor está fora do ar. A qualidade com o modelo real precisa de amostra real.

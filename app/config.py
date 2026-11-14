@@ -44,7 +44,8 @@ class Settings:
     # Matriz de tempos: haversine | osrm
     matrix: str = os.environ.get("MATRIX", "haversine")
     osrm_url: str = os.environ.get("OSRM_URL", "http://localhost:5000")
-    osrm_block: int = _i("OSRM_BLOCK", 50)
+    osrm_block: int = _i("OSRM_BLOCK", 100)     # pontos de origem e de destino por requisição (limite do servidor: 200 no total)
+    osrm_workers: int = _i("OSRM_WORKERS", 8)
     # Estimativa usada quando não há OSRM
     avg_speed_kmh: float = _f("AVG_SPEED_KMH", 28.0)
     detour_factor: float = _f("DETOUR_FACTOR", 1.35)
