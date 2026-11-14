@@ -1,20 +1,23 @@
 """Divide as paradas entre N entregadores e ordena cada rota.
 
-Problema: cada entregador sai do PRÓPRIO ponto de partida (a casa/localização atual) e todos
-terminam no MESMO ponto final; o custo é tempo de deslocamento (+ tempo de parada).
+Problema: cada entregador sai do PRÓPRIO ponto de partida e todos terminam no MESMO ponto final; o custo é
+tempo de deslocamento + tempo parado. O que se quer igualar entre os entregadores é a CARGA: km rodados,
+entregas e tempo ao mesmo tempo (o critério escolhido ganha peso maior).
 
-Abordagem em três etapas (agrupar -> rotear -> polir):
-  1. Agrupamento balanceado: k-means em que cada grupo tem o mesmo tamanho (± 1 parada),
-     resolvido como problema de designação. Dá grupos compactos e equilibrados. Com zonas da
-     cidade, as coordenadas são puxadas para o centro da zona (peso `zone_weight`) antes do k-means.
-  2. Cada grupo é entregue a quem mora mais perto dele (designação k x k) e a rota do grupo
-     é ordenada como caminho início -> paradas -> ponto final (TSP aberto, OR-Tools).
-  3. Polimento global (OR-Tools VRP) partindo da solução anterior: paradas de fronteira podem
-     trocar de entregador se isso reduzir o tempo, dentro de uma faixa de paradas por entregador
-     que o parâmetro `balance` (0..1) estreita ou alarga, mais uma penalidade sobre a rota mais longa.
+Etapas:
+  1. Setores: as paradas são agrupadas em "fatias de pizza" a partir do ponto de partida (k-means balanceado
+     num anel em torno dele), de modo que cada fatia tenha paradas perto e longe. Zonas da cidade puxam as
+     paradas para o centro da zona com peso pequeno (no máximo MAX_ZONE_WEIGHT).
+  2. Capacidade: a largura de cada fatia é ajustada por uma medida combinada de km, entregas e tempo.
+  3. Cada fatia é ordenada como caminho aberto (partida -> paradas -> chegada) com OR-Tools.
+  4. Redistribuição: paradas saem da rota mais sobrecarregada para as folgadas, avaliando o efeito real em km,
+     entregas e tempo de cada rota, até a carga ficar equilibrada (ou acabar o orçamento de movimentos,
+     proporcional ao parâmetro `balance`). Igualar custa km no total: quem moraria "perto" roda mais.
+  5. Cada rota é reordenada.
 
-Por que não só o VRP do OR-Tools: partindo do zero ele deixava entregadores sem paradas
-(mínimos de paradas não são alcançados por heurísticas de inserção). Medido com 800-2000 paradas.
+Medido (1400 entregas reais de Porto Alegre, 14 entregadores, mesma partida): agrupar por manchas de bairro
+deixava km 33-120, entregas 90-112 e tempo 5,3-8,7 h; igualar só km deixava entregas de 8 a 170. Esta
+abordagem com km prioritário deixou km 74-85, entregas 98-102 e tempo 7,0-7,3 h, com ~45% mais km no total.
 """
 from __future__ import annotations
 
@@ -28,12 +31,21 @@ from scipy.optimize import linear_sum_assignment
 
 from .matrix import estimated_dist_m
 
-SPAN_WEIGHT = 20       # equilíbrio por paradas: peso do tempo da rota mais longa (x balance)
-TIME_SPAN_WEIGHT = 40  # equilíbrio por tempo: peso do tempo da rota mais longa (x balance)
-KM_SPAN_WEIGHT = 500   # equilíbrio por km: peso por 100 m da rota mais longa (x balance); ~1 km = 129 s de viagem
-ADAPT_ITERS = 12      # rodadas de ajuste de capacidade dos grupos (equilíbrio por tempo/km)
-LOW_PENALTY = 600      # custo (s) por parada abaixo do piso de paradas de um entregador
-BALANCE_MODES = ("stops", "time", "km")
+MODE_WEIGHTS = {            # pesos (km, entregas, tempo) usados para medir a carga e redistribuir
+    "km": (6.0, 1.0, 1.0),
+    "time": (1.0, 1.0, 4.0),
+    "stops": (1.0, 4.0, 1.0),   # no modo "paradas" a medida de entregas conta paradas, não entregas
+}
+BALANCE_MODES = tuple(MODE_WEIGHTS)
+BAND_WEIGHTS = (6.0, 1.0, 1.0)        # km em faixa: peso do desvio ALÉM da faixa, entregas, tempo
+BAND_ADAPT_WEIGHTS = (0.25, 1.0, 1.0)  # na largura das fatias o km conta pouco
+REFINE_STEPS = (1.0, 1.0, 1.0)  # passadas de redistribuição, cada uma seguida de reordenação das rotas (TSP)
+ADAPT_POWER = 0.5           # expoente do ajuste de largura das fatias, x balance
+ADAPT_ITERS = 12            # rodadas de ajuste da largura das fatias
+POLAR_BETA = 0.25           # quanto da posição real (além do ângulo) entra no agrupamento em fatias
+MAX_ZONE_WEIGHT = 0.15      # a zona nunca pesa mais que 15% (limite pedido: a carga vem antes)
+KM_GROWTH_PEN = 6.0           # penalidade pelo aumento do km total, x (1 - balance): 100% = sem penalidade
+ZONE_PEN_AT_MAX = 0.06      # penalidade por parada fora da zona de origem, no peso máximo de zona
 
 
 @dataclass
@@ -155,6 +167,105 @@ def _order_open_path(cost: np.ndarray, start: int, members: list[int], end: int,
     return out
 
 
+def _rebalance(routes, k, n, depot, dist, travel, service, dels, weights, zone_idx=None, zone_pen=0.0,
+               max_iters=1500, km_growth_pen=0.0, km_band=None):
+    """Move paradas da rota mais sobrecarregada para as folgadas, medindo o efeito REAL (custo de remover e de
+    inserir na melhor posição) em km, entregas e tempo de cada rota. Minimiza a soma dos desvios quadrados
+    relativos de cada medida, ponderados por `weights` = (km, entregas, tempo) + uma penalidade pequena por
+    parada fora da zona "de origem" do entregador."""
+    wk, wd, wt = weights
+    paths = [[n + v, *routes[v], depot] for v in range(k)]
+    km = np.array([dist[p[:-1], p[1:]].sum() / 1000 for p in paths])
+    km0 = max(km.sum(), 1e-9)   # km total antes de redistribuir: referência da penalidade de crescimento
+    tr = np.array([travel[p[:-1], p[1:]].sum() for p in paths], dtype=float)
+    tm = tr + np.array([service[routes[v]].sum() for v in range(k)])
+    dl = np.array([dels[routes[v]].sum() for v in range(k)], dtype=float)
+    if zone_idx is not None and zone_pen > 0:
+        home = [np.bincount(zone_idx[routes[v]]).argmax() if routes[v] else -1 for v in range(k)]
+        zm = np.array([(zone_idx[routes[v]] != home[v]).sum() for v in range(k)], dtype=float)
+    else:
+        home, zm = None, np.zeros(k)
+
+    def fm(S1, S2):                       # soma de (m_v/média - 1)^2 a partir de S1 = soma e S2 = soma dos quadrados
+        return k * k * S2 / np.maximum(S1 * S1, 1e-9) - k
+
+    def pen_band(x, mu):                  # desvio relativo ALÉM da faixa permitida, ao quadrado
+        return np.maximum(0.0, np.abs(x / mu - 1) - km_band) ** 2
+
+    def km_term():
+        if km_band is None:
+            return fm(km.sum(), (km ** 2).sum())
+        return pen_band(km, km.mean()).sum()
+
+    def total():
+        return (wk * km_term() + wd * fm(dl.sum(), (dl ** 2).sum())
+                + wt * fm(tm.sum(), (tm ** 2).sum()) + zone_pen * zm.sum() / max(n, 1) * k
+                + km_growth_pen * (km.sum() / km0 - 1))
+
+    def load(v):
+        kdev = km[v] / km.mean() - 1
+        if km_band is not None:        # dentro da faixa o km não conta como sobrecarga
+            kdev = np.sign(kdev) * max(0.0, abs(kdev) - km_band)
+        return wk * kdev + wd * (dl[v] / dl.mean() - 1) + wt * (tm[v] / tm.mean() - 1)
+
+    moves = 0
+    for _ in range(max_iters):
+        f0 = total()
+        S = {"km": (km.sum(), (km ** 2).sum()), "dl": (dl.sum(), (dl ** 2).sum()), "tm": (tm.sum(), (tm ** 2).sum())}
+        best = None
+        for a in sorted(range(k), key=load, reverse=True)[: max(3, k // 3)]:
+            seq = paths[a][1:-1]
+            if len(seq) <= 1:
+                continue
+            st = np.array(seq)
+            pa, qa = np.array(paths[a][:-2]), np.array(paths[a][2:])
+            rem_km = (dist[pa, st] + dist[st, qa] - dist[pa, qa]) / 1000
+            rem_tr = travel[pa, st] + travel[st, qa] - travel[pa, qa]
+            for b in range(k):
+                if b == a:
+                    continue
+                pb, qb = np.array(paths[b][:-1]), np.array(paths[b][1:])
+                ins_tr = travel[pb][:, st] + travel[st][:, qb].T - travel[pb, qb][:, None]      # (posições, paradas)
+                pos = ins_tr.argmin(0)
+                cols = np.arange(len(st))
+                ins_tr_best = ins_tr[pos, cols]
+                ins_km = (dist[pb[pos], st] + dist[st, qb[pos]] - dist[pb[pos], qb[pos]]) / 1000
+                ka, kb = km[a] - rem_km, km[b] + ins_km
+                ta, tb = tm[a] - rem_tr - service[st], tm[b] + ins_tr_best + service[st]
+                da, db = dl[a] - dels[st], dl[b] + dels[st]
+                dk = ka + kb - km[a] - km[b]
+                if km_band is None:
+                    km_f = fm(S["km"][0] + dk, S["km"][1] - km[a] ** 2 - km[b] ** 2 + ka ** 2 + kb ** 2)
+                else:
+                    mu = km.mean()
+                    km_f = (pen_band(km, mu).sum() - pen_band(km[a], mu) - pen_band(km[b], mu)
+                            + pen_band(ka, mu) + pen_band(kb, mu))
+                f = (wk * km_f
+                     + wd * fm(S["dl"][0], S["dl"][1] - dl[a] ** 2 - dl[b] ** 2 + da ** 2 + db ** 2)
+                     + wt * fm(S["tm"][0] + (ta + tb - tm[a] - tm[b]), S["tm"][1] - tm[a] ** 2 - tm[b] ** 2 + ta ** 2 + tb ** 2))
+                f = f + km_growth_pen * ((S["km"][0] + dk) / km0 - 1)
+                if home is not None:
+                    mis_a = (zone_idx[st] != home[a]).astype(float)
+                    mis_b = (zone_idx[st] != home[b]).astype(float)
+                    f = f + zone_pen * (zm.sum() - mis_a + mis_b) / max(n, 1) * k
+                else:
+                    f = f + zone_pen * 0
+                i = int(np.argmin(f))
+                if best is None or f[i] < best[0]:
+                    best = (float(f[i]), a, b, int(st[i]), int(pos[i]), float(ka[i]), float(kb[i]), float(ta[i]), float(tb[i]),
+                            float(da[i]), float(db[i]))
+        if best is None or best[0] >= f0 - 1e-6:
+            break
+        _, a, b, stop, pos, ka, kb, ta, tb, da, db = best
+        paths[a].remove(stop)
+        paths[b].insert(pos + 1, stop)
+        km[a], km[b], tm[a], tm[b], dl[a], dl[b] = ka, kb, ta, tb, da, db
+        if home is not None:
+            zm[a] -= float(zone_idx[stop] != home[a]); zm[b] += float(zone_idx[stop] != home[b])
+        moves += 1
+    return [p[1:-1] for p in paths], moves
+
+
 def solve(
     stop_latlon: np.ndarray,
     starts_latlon: np.ndarray,
@@ -166,13 +277,15 @@ def solve(
     zone_idx: np.ndarray | None = None,
     zone_centers: np.ndarray | None = None,
     zone_weight: float = 0.0,
-    balance_by: str = "stops",
+    balance_by: str = "km",
     stop_service: np.ndarray | None = None,
+    stop_deliveries: np.ndarray | None = None,
+    km_tolerance: float | None = None,
 ) -> SolveResult:
-    """balance_by: o que o equilíbrio iguala entre entregadores — "stops" (quantidade de paradas),
-    "time" (tempo de rota) ou "km" (distância rodada). `balance` (0..1) é a intensidade.
-    stop_service: tempo parado em cada ponto (s); padrão = service_seconds em todos. Pontos com várias
-    entregas (mesmo endereço, condomínio) levam mais tempo parado."""
+    """balance_by: critério que pesa mais ao igualar a carga — "km" (distância rodada), "time" (tempo de rota)
+    ou "stops" (quantidade de paradas); os outros dois continuam entrando com peso menor. `balance` (0..1) é
+    até onde ir: 0 = só agrupar por proximidade; 1 = redistribuir até igualar. `zone_weight` é limitado a
+    MAX_ZONE_WEIGHT. stop_service: tempo parado em cada ponto (s). stop_deliveries: entregas em cada ponto."""
     if balance_by not in BALANCE_MODES:
         raise ValueError(f"balance_by deve ser um de {BALANCE_MODES}")
     t0 = time.monotonic()
@@ -192,14 +305,23 @@ def solve(
     cost = travel + service[:, None]          # sair do nó i = viagem + parada em i
     np.fill_diagonal(cost, 0)
 
-    # 1) grupos balanceados e 2) quem mora mais perto de cada grupo
-    # Prioridade por zonas: cada parada é "puxada" para o centro da sua zona antes de agrupar, então
-    # paradas da mesma zona tendem a ficar juntas e só se dividem entre entregadores quando a zona é grande.
+    balance = min(max(balance, 0.0), 1.0)
+    zw = min(max(zone_weight, 0.0), MAX_ZONE_WEIGHT)
+    weights = MODE_WEIGHTS[balance_by]
+    if km_tolerance is not None:       # km em faixa: entregas e tempo são o alvo, o km só não pode passar da faixa
+        weights = BAND_WEIGHTS
+    dels = np.ones(n) if (balance_by == "stops" or stop_deliveries is None) else np.asarray(stop_deliveries, dtype=float)
+    avg = n / k
+
+    # 1) fatias a partir da partida (com um empurrão pequeno das zonas)
     origin = stop_latlon.mean(0)
     xy = _project(stop_latlon, origin)
-    if zone_idx is not None and zone_centers is not None and zone_weight > 0:
-        w = min(max(zone_weight, 0.0), 1.0)
-        xy = (1 - w) * xy + w * _project(zone_centers, origin)[zone_idx]
+    if zone_idx is not None and zone_centers is not None and zw > 0:
+        xy = (1 - zw) * xy + zw * _project(zone_centers, origin)[zone_idx]
+    rel = xy - _project(depot_latlon[None, :], origin)[0]
+    r, th = np.hypot(rel[:, 0], rel[:, 1]), np.arctan2(rel[:, 1], rel[:, 0])
+    ring = np.column_stack([np.median(r) * np.cos(th), np.median(r) * np.sin(th)])
+    xy = ring + POLAR_BETA * rel
     labels, centers = _balanced(xy, k)
     groups = [np.flatnonzero(labels == j) for j in range(k)]
     match = np.zeros((k, k))
@@ -208,83 +330,48 @@ def solve(
             match[v, j] = travel[n + v, g].mean() if len(g) else 0
     drivers, clusters = linear_sum_assignment(match)
     order = {int(v): int(c) for v, c in zip(drivers, clusters)}
-    centers = np.array([centers[order[v]] for v in range(k)])        # centro do grupo de cada entregador
+    centers = np.array([centers[order[v]] for v in range(k)])
     assigned = {v: groups[order[v]] for v in range(k)}
 
-    # Equilíbrio por tempo/km: entregadores cujas paradas "custam" mais (moram longe, zona espalhada)
-    # recebem menos paradas. Ajusta as capacidades dos grupos e reagrupa algumas vezes.
-    balance = min(max(balance, 0.0), 1.0)
-    avg = n / k
-    if balance_by in ("time", "km") and k > 1 and balance > 0:
-        mat = travel if balance_by == "time" else dist          # simétricas: o 2-opt não depende do sentido
-        per_stop = service if balance_by == "time" else np.zeros_like(service)
+    # 2) largura das fatias por uma medida combinada de km, entregas e tempo
+    wk, wd, wt = weights if km_tolerance is None else BAND_ADAPT_WEIGHTS
+    if k > 1 and balance > 0:
         caps = np.full(k, float(math.ceil(avg)))
+        norm = lambda a: a / max(a.mean(), 1e-9)
         for _ in range(ADAPT_ITERS):
-            metric = np.array([_nn_cost(mat, n + v, assigned[v], depot) + per_stop[assigned[v]].sum() for v in range(k)], dtype=float)
-            ratio = metric.mean() / np.maximum(metric, 1.0)
-            caps = np.clip(caps * ratio ** (1.0 * balance), 0.1 * avg, 1.9 * avg)
-            int_caps = _fix_sum(caps, n)
-            labels, centers = _balanced(xy, k, int_caps, centers, iters=4)
+            km_v = np.array([_nn_cost(dist, n + v, assigned[v], depot) for v in range(k)], dtype=float)
+            tm_v = np.array([_nn_cost(travel, n + v, assigned[v], depot) + service[assigned[v]].sum() for v in range(k)], dtype=float)
+            dl_v = np.array([dels[assigned[v]].sum() for v in range(k)], dtype=float)
+            score = (wk * norm(km_v) + wd * norm(dl_v) + wt * norm(tm_v)) / (wk + wd + wt)
+            ratio = score.mean() / np.maximum(score, 1e-9)
+            caps = np.clip(caps * ratio ** (ADAPT_POWER * balance), 0.1 * avg, 1.9 * avg)
+            labels, centers = _balanced(xy, k, _fix_sum(caps, n), centers, iters=4)
             assigned = {v: np.flatnonzero(labels == v) for v in range(k)}
 
-    per_cluster = max(0.5, 0.3 * time_limit / k)
-    initial = [
-        _order_open_path(cost, n + v, [int(x) for x in assigned[v]], depot, per_cluster)
-        for v in range(k)
-    ]
+    # 3) ordem de cada fatia
+    per_cluster = max(0.4, 0.2 * time_limit / k)
+    routes = [_order_open_path(cost, n + v, [int(x) for x in assigned[v]], depot, per_cluster) for v in range(k)]
 
-    # 3) polimento global
-    if balance_by == "stops":      # iguala a quantidade (faixa estreita de paradas) e aperta o tempo máximo
-        spread, time_w, km_w = 0.9 - 0.75 * balance, balance * SPAN_WEIGHT, 0
-    elif balance_by == "time":     # iguala o tempo de rota; a quantidade de paradas pode variar mais
-        spread, time_w, km_w = 0.9, balance * TIME_SPAN_WEIGHT, 0
-    else:                          # iguala os km rodados
-        spread, time_w, km_w = 0.9, 0, balance * KM_SPAN_WEIGHT
-    lo = math.floor(avg * (1 - spread))
-    hi = max(math.ceil(avg * (1 + spread)), max(len(r) for r in initial))
+    # 4) redistribuição por carga real + 5) reordena
+    status = "ok"
+    if k > 1 and balance > 0:
+        pen = ZONE_PEN_AT_MAX * zw / MAX_ZONE_WEIGHT
+        moves = 0
+        for mult in REFINE_STEPS:
+            w = weights if km_tolerance is not None else (weights[0] * mult, weights[1], weights[2]) if balance_by == "km" else                 (weights[0], weights[1], weights[2] * mult) if balance_by == "time" else (weights[0], weights[1] * mult, weights[2])
+            routes, m = _rebalance(routes, k, n, depot, dist, travel, service, dels, w, zone_idx, pen,
+                                   max_iters=max(600, 2 * n), km_growth_pen=KM_GROWTH_PEN * (1 - balance),
+                                   km_band=km_tolerance)
+            moves += m
+            # reordena a cada passada: o km "de verdade" depois do TSP é o que a próxima passada deve igualar
+            routes = [_order_open_path(cost, n + v, [int(x) for x in routes[v]], depot, per_cluster) for v in range(k)]
+        status = f"ok ({moves} paradas redistribuídas)"
 
-    manager = pywrapcp.RoutingIndexManager(len(coords), k, [n + v for v in range(k)], [depot] * k)
-    routing = pywrapcp.RoutingModel(manager)
-    transit = routing.RegisterTransitMatrix(cost.tolist())
-    routing.SetArcCostEvaluatorOfAllVehicles(transit)
-
-    stops_cb = routing.RegisterUnaryTransitVector([1] * n + [0] * (k + 1))
-    routing.AddDimension(stops_cb, 0, hi, True, "Paradas")            # teto rígido por entregador
-    stops_dim = routing.GetDimensionOrDie("Paradas")
-    for v in range(k):                                                # piso macio
-        stops_dim.SetCumulVarSoftLowerBound(routing.End(v), lo, LOW_PENALTY)
-    if time_w > 0:
-        routing.AddDimension(transit, 0, 10**7, True, "Tempo")
-        routing.GetDimensionOrDie("Tempo").SetGlobalSpanCostCoefficient(int(round(time_w)))
-    if km_w > 0:  # unidade da dimensão: 100 m
-        km_cb = routing.RegisterTransitMatrix(np.rint(dist / 100).astype(np.int64).tolist())
-        routing.AddDimension(km_cb, 0, 10**7, True, "Km")
-        routing.GetDimensionOrDie("Km").SetGlobalSpanCostCoefficient(int(round(km_w)))
-
-    params = pywrapcp.DefaultRoutingSearchParameters()
-    params.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    remaining = max(2.0, time_limit - (time.monotonic() - t0))
-    params.time_limit.FromMilliseconds(int(remaining * 1000))
-    routing.CloseModelWithParameters(params)
-    start_sol = routing.ReadAssignmentFromRoutes(initial, True)
-    solution = routing.SolveFromAssignmentWithParameters(start_sol, params) if start_sol else None
-    status = "ok" if solution is not None else "ok (sem polimento)"
-
-    routes, legs, meters, total = [], [], [], 0
+    legs, meters, total = [], [], 0
     for v in range(k):
-        if solution is None:
-            seq = initial[v]
-        else:
-            idx, seq = routing.Start(v), []
-            while not routing.IsEnd(idx):
-                idx = solution.Value(routing.NextVar(idx))
-                node = manager.IndexToNode(idx)
-                if node < n:
-                    seq.append(node)
-        path = [n + v, *seq, depot]
+        path = [n + v, *routes[v], depot]
         leg = [int(travel[a, b]) for a, b in zip(path, path[1:])]
-        routes.append(seq)
         legs.append(leg)
         meters.append([int(dist[a, b]) for a, b in zip(path, path[1:])])
-        total += sum(leg) + int(service[seq].sum()) if seq else sum(leg)
+        total += sum(leg) + (int(service[routes[v]].sum()) if routes[v] else 0)
     return SolveResult(routes, legs, total, status, meters)

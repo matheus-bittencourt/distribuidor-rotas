@@ -79,7 +79,7 @@ function savePrefs() {
   try {
     localStorage.setItem(PREF_KEY, JSON.stringify({
       drivers: $("drivers").value, n: $("n-drivers").value, by: $("balance-by").value,
-      balance: $("balance").value, zone: $("zone").value, depot: $("depot").value, v: 2,
+      balance: $("balance").value, zone: $("zone").value, depot: $("depot").value, v: 4, kmtol: $("km-tol").value,
       tol: toleranceMin() === defaultToleranceMin() ? null : $("tolerance").value,
     }));
     show("saved-note");
@@ -90,9 +90,9 @@ function forgetPrefs() { try { localStorage.removeItem(PREF_KEY); } catch {} $("
 // ------------------------------------------------------------------ início
 const BY_LABEL = { stops: "paradas", time: "tempo de rota", km: "km rodados" };
 const BY_HELP = {
-  stops: "Cada entregador recebe quase o mesmo número de entregas.",
-  time: "Cada um termina a rota em tempo parecido; quem mora longe ou atende zona espalhada recebe menos paradas.",
-  km: "Cada um roda uma distância parecida; a soma de km tende a subir e o número de paradas varia bastante.",
+  km: "Prioriza igualar os km de cada entregador; entregas e tempo também são equilibrados, com peso menor. Igualar km aumenta o total rodado.",
+  time: "Prioriza igualar o tempo de rota; km e entregas entram com peso menor.",
+  stops: "Prioriza igualar a quantidade de paradas; km, entregas e tempo entram com peso menor.",
 };
 const METHOD = {
   "tabela": "local, sem IA", "modelo salvo": "formato salvo, sem IA", "colunas indicadas": "colunas indicadas por você",
@@ -106,15 +106,19 @@ async function init() {
   $("depot").value = p.depot || state.cfg.default_depot;
   if (p.drivers) { $("drivers").value = p.drivers; show("saved-note"); }
   if (p.n) $("n-drivers").value = p.n;
-  $("tolerance").value = p.v === 2 && p.tol != null ? p.tol : defaultToleranceMin();
-  if (p.by) $("balance-by").value = p.by;
-  $("balance").value = p.balance ?? 0.7; $("zone").value = p.zone ?? state.cfg.zone_weight;
-  state.fromPrefs = p.by != null || p.balance != null;
+  const fresh = p.v === 4;   // ajustes de divisão antigos (outra escala) não valem mais
+  $("tolerance").value = fresh && p.tol != null ? p.tol : defaultToleranceMin();
+  // vazio é uma escolha válida (igualar km); só vale se foi salvo nesta versão das preferências
+  $("km-tol").value = fresh && p.kmtol !== undefined ? p.kmtol : Math.round((state.cfg.km_tolerance ?? 0) * 100) || "";
+  if (fresh && p.by) $("balance-by").value = p.by;
+  $("balance").value = fresh ? p.balance ?? 1 : 1;
+  $("zone").value = Math.min(fresh ? p.zone ?? state.cfg.zone_weight : state.cfg.zone_weight, state.cfg.zone_weight_max ?? 0.15);
+  state.fromPrefs = fresh && (p.by != null || p.balance != null);
   const ai = state.cfg.llm.startsWith("nenhuma") ? "sem IA: regras simples, menos precisas" : state.cfg.llm;
   $("s1ai").textContent = `PDF e texto livre: ${ai}.`;
 
   ["balance", "zone", "balance-by"].forEach((id) => $(id).addEventListener("input", () => { state.fromPrefs = false; }));
-  ["balance", "zone", "balance-by", "drivers", "depot", "tolerance"].forEach((id) => $(id).addEventListener("input", updatePlan));
+  ["balance", "zone", "balance-by", "drivers", "depot", "tolerance", "km-tol"].forEach((id) => $(id).addEventListener("input", updatePlan));
   // menu "Mais" fecha ao clicar fora ou com Esc
   document.addEventListener("click", (e) => document.querySelectorAll("details.more[open]").forEach((d) => { if (!d.contains(e.target)) d.open = false; }));
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") document.querySelectorAll("details.more[open]").forEach((d) => { d.open = false; d.querySelector("summary").focus(); }); });
@@ -324,24 +328,26 @@ function parseDrivers() {
 // Tolerância por entrega, em minutos inteiros (0 a 30).
 const defaultToleranceMin = () => Math.round((state.cfg.delivery_tolerance_seconds ?? 60) / 60);
 const toleranceMin = () => Math.max(0, Math.min(30, Math.round(parseFloat($("tolerance").value) || 0)));
+// Faixa de km em torno da média (fração) ou null = igualar os km.
+const kmTolerance = () => { const v = parseFloat($("km-tol").value); return Number.isFinite(v) && v > 0 ? Math.min(v, 100) / 100 : null; };
 const BY_WHAT = { stops: "o número de paradas", time: "o tempo de rota", km: "os km rodados" };
 // O valor da barra é uma proporção entre dois objetivos que puxam em direções opostas.
 function balanceScale(by) {
-  return `A barra mistura dois objetivos: 0% = só importa rodar o mínimo no total; 100% = igualar ${BY_WHAT[by]} entre os entregadores, mesmo que o total de km suba. Valores do meio dão peso aos dois.`;
+  return `0% = só agrupar por proximidade (menos km no total, carga desigual); 100% = redistribuir as paradas até igualar a carga, com prioridade para ${BY_WHAT[by]} (entregas e tempo também entram), mesmo que o total de km suba. Valores do meio aceitam alguma diferença para não subir tanto o total.`;
 }
 function balanceNow(b) {
   const now = b === 0 ? "sem equilíbrio: um entregador pode ficar com bem mais trabalho que outro."
-    : b < 0.4 ? "equilíbrio leve, só pequenas correções."
+    : b < 0.4 ? "equilíbrio leve: total de km baixo, mas a carga ainda varia bastante."
     : b < 0.75 ? "equilíbrio moderado."
-    : "equilíbrio forte: rotas bem parecidas, com mais km no total.";
+    : "equilíbrio forte: carga bem parecida entre os entregadores, com mais km no total.";
   return `Agora (${pct(b)}): ${now}`;
 }
-const ZONE_SCALE = "0% = só a distância entre paradas decide; 100% = cada zona da cidade vira um bloco e só se divide entre entregadores quando é grande demais para um só. Valores do meio aproximam as paradas da mesma zona sem separá-las por completo.";
+const ZONE_SCALE = "A zona só desempata: com no máximo 15% de peso, a carga (km, entregas e tempo) vem antes. 0% ignora as zonas; 15% faz cada entregador preferir paradas da mesma zona quando isso não piora o equilíbrio.";
 function zoneNow(z) {
   const now = z === 0 ? "as zonas são ignoradas."
-    : z < 0.4 ? "zonas pesam pouco."
-    : z < 0.75 ? "zonas pesam de forma moderada."
-    : "cada entregador tende a ficar numa zona só, o que pode piorar a distância.";
+    : z < 0.06 ? "zonas pesam pouco."
+    : z < 0.11 ? "zonas pesam de forma moderada."
+    : "peso máximo das zonas: ainda assim, a carga manda.";
   return `Agora (${pct(z)}): ${now}`;
 }
 function updatePlan() {
@@ -352,8 +358,10 @@ function updatePlan() {
   $("balance-help").textContent = BY_HELP[by];
   $("balance-now").textContent = balanceNow(b); $("balance-scale").textContent = balanceScale(by);
   $("zone-now").textContent = zoneNow(z); $("zone-scale").textContent = ZONE_SCALE;
-  const tol = toleranceMin();
-  $("adv-summary").textContent = `igualar ${BY_LABEL[by]} · ${pct(b)} · zonas ${pct(z)} · tolerância ${tol} min${state.fromPrefs ? " · da última vez" : ""}`;
+  const tol = toleranceMin(), kt = kmTolerance();
+  $("km-tol-help").textContent = kt === null
+    ? "Vazio: o app tenta deixar os km parecidos entre os entregadores. Com um valor (ex.: 30), entregas e tempo viram o alvo e o km só não pode passar de ±30% da média: o total de km cai, mas os km deixam de ser parecidos."
+    : `Entregas e tempo são o alvo; cada rota pode ter km até ${Math.round(kt * 100)}% acima ou abaixo da média sem penalidade.`;  $("adv-summary").textContent = `igualar ${BY_LABEL[by]} · ${pct(b)} · zonas ${pct(z)}${kt !== null ? ` · km ±${Math.round(kt * 100)}%` : ""} · tolerância ${tol} min${state.fromPrefs ? " · da última vez" : ""}`;
   $("drivers-count").textContent = d.length ? `${d.length} entregador${d.length > 1 ? "es" : ""}${home ? ` · ${home} saem de casa` : ""}` : "";
   const stops = state.okCount ? `${state.okCount} entregas` : "entregas";
   $("plan").textContent = !state.okCount ? "Nenhuma entrega localizada ainda: resolva os endereços para revisar."
@@ -395,7 +403,7 @@ async function solve() {
     await post(`/api/jobs/${state.job}/solve`, {
       depot: { address: $("depot").value.trim() }, drivers, balance: parseFloat($("balance").value),
       balance_by: $("balance-by").value, zone_weight: parseFloat($("zone").value),
-      tolerance_seconds: toleranceMin() * 60,
+      tolerance_seconds: toleranceMin() * 60, km_tolerance: kmTolerance(),
     });
     await awaitResult();
     setStatus("s2status", "");
@@ -488,7 +496,12 @@ function renderResult(r) {
   const metric = (d) => (by === "km" ? d.km : by === "stops" ? d.count : d.total_min);
   const ms = dr.map(metric), mx = Math.max(...ms), mn = Math.min(...ms);
   const diff = mx ? Math.round(((mx - mn) / mx) * 100) : 0;
-  const verdictWord = diff <= 12 ? "bem parecidas" : diff <= 30 ? "razoavelmente parecidas" : "bem diferentes";
+  const dsp = (arr) => { const m = Math.max(...arr), l = Math.min(...arr); return m ? Math.round(((m - l) / m) * 100) : 0; };
+  const spreads = { km: dsp(kms), entregas: dsp(dr.map((d) => d.deliveries)), tempo: dsp(times) };
+  // Com tolerância de km, o km é avaliado contra a faixa (±t da média permite até 2t/(1+t) entre menor e maior).
+  const kt = r.km_tolerance, kmAllowed = kt ? Math.round(((2 * kt) / (1 + kt)) * 100) : null;
+  const worst = Math.max(kt ? 0 : spreads.km, spreads.entregas, spreads.tempo);
+  const verdictWord = worst <= 15 ? "bem equilibradas" : worst <= 30 ? "razoavelmente equilibradas" : "bem desiguais";
 
   const notes = [
     `Tempos e km ${estimated ? "estimados em linha reta (sem as ruas)" : "calculados pelas ruas"}`,
@@ -505,7 +518,9 @@ function renderResult(r) {
       el("div", {}, el("dt", {}, "Tempo por rota"), el("dd", {}, Math.min(...times) === Math.max(...times) ? fmtMin(times[0]) : `${fmtMin(Math.min(...times))}–${fmtMin(Math.max(...times))}`)),
       el("div", {}, el("dt", {}, `Km por entregador (soma ${Math.round(kms.reduce((a, b) => a + b, 0))})`), el("dd", {}, `${Math.round(Math.min(...kms))}–${Math.round(Math.max(...kms))} km`)),
     ),
-    ...(n > 1 ? [el("p", { class: `verdict ${diff <= 30 ? "ok" : "warn"}` }, `Rotas ${verdictWord} em ${CRIT[by]}: diferença de ${diff}% entre a menor e a maior.`)] : []),
+    ...(n > 1 ? [el("p", { class: `verdict ${worst <= 30 ? "ok" : "warn"}` },
+      `Rotas ${verdictWord}. Diferença entre a menor e a maior: km ${spreads.km}% · entregas ${spreads.entregas}% · tempo ${spreads.tempo}%.` +
+      (kt ? ` O km tem tolerância de ±${Math.round(kt * 100)}%: ${spreads.km <= kmAllowed ? "dentro" : "fora"} da faixa (até ${kmAllowed}%).` : ""))] : []),
     el("p", { class: "note" }, notes.join(" · ") + "."),
     ...(mostApprox ? [el("div", { class: "status warn" }, icon("alert"),
       el("span", {}, `${approxN} de ${all.length} posições são aproximadas: só a rua foi localizada, então o ponto pode estar a algumas quadras. A ordem das paradas continua valendo.`))] : []),

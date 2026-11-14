@@ -48,10 +48,10 @@ Rua y, 543;Alberto Jota;BR00123POA
 | Só Porto Alegre | Endereço sem cidade é consultado "em Porto Alegre"; cidade da região metropolitana no texto ou no resultado do mapa, ou ponto fora do município, vai para **revisar**. Casas de entregadores podem ficar fora de POA. |
 | Descartar CPF, dívida etc. | Colunas sensíveis caem pelo cabeçalho; o restante passa por regex local (CPF, CNPJ, valores, telefone, e-mail, datas, números longos) **antes** de qualquer uso de IA; a saída da IA é mascarada e conferida contra a linha original. |
 | Arquivos apagados | O arquivo nunca vai para disco. Dados só em memória, somem em 2 h ou no botão "Apagar tudo agora". |
-| Centenas de linhas, por zonas | Cada parada é associada a uma das 10 zonas da cidade (`app/zones.json`) e "puxada" para o centro dela antes do agrupamento (controle **Prioridade por zona**). Depois, k-means de tamanhos iguais + polimento global (OR-Tools). A tela mostra a zona principal de cada entregador e a % de paradas dentro dela. |
+| Centenas de linhas, por zonas | Cada parada é associada a uma das 10 zonas da cidade (`app/zones.json`). **A zona pesa no máximo 15%** (controle "Peso das zonas", padrão 10%): ela puxa as paradas para o centro da zona e penaliza levemente paradas fora da zona do entregador, mas a carga (km, entregas e tempo) vem antes. A tela mostra a zona principal de cada entregador e a % de paradas dentro dela. |
 | Enviar ao entregador | Dois botões por entregador: **Rota** (paradas na ordem, com nome, endereço e código) e **Links** (só os links do Maps, em trechos de até 10 paradas), para enviar em duas mensagens seguidas no WhatsApp. **Imprimir** gera a lista **completa** do entregador (todas as paradas e entregas, sem o corte de 10 dos links), em A4, com coluna de conferência; "Imprimir todas" põe um entregador por folha. |
 | Várias entregas no mesmo endereço | Entregas no mesmo ponto (casa ou condomínio, com Bloco/apto diferentes) viram **uma parada só**: o entregador para uma vez, o Maps não repete o ponto e o tempo parado soma `EXTRA_DELIVERY_SECONDS` (45 s) por entrega a mais. A lista e o CSV continuam com uma linha por entrega. |
-| Equilíbrio entre entregadores | Seletor **"Igualar entre os entregadores"**: quantidade de paradas, tempo de rota ou km rodados, com controle de intensidade. Em tempo/km, quem mora longe ou tem zona espalhada recebe menos paradas (capacidades dos grupos ajustadas em rodadas). Igualar km aumenta a soma de km da operação (ver limites). |
+| Equilíbrio entre entregadores | Iguala a **carga** (km rodados, entregas e tempo juntos); o seletor "Igualar entre os entregadores" escolhe qual pesa mais (padrão: **km**, peso 6:1:1). Método: fatias a partir da partida → largura ajustada por uma medida combinada → paradas movidas da rota mais sobrecarregada para as folgadas, medindo o efeito real em cada rota, em 3 passadas com reordenação. "Quanto igualar" vai de 0% (só proximidade) a 100% (igualar tudo). A tela mostra a diferença menor×maior de km, entregas e tempo. |
 | Início/fim | Todos saem do ponto padrão (ou da casa, se informada) e **terminam no ponto de chegada**. Entregador listado só pelo nome sai do ponto padrão. |
 | Distância por tempo | Matriz de tempos (OSRM por ruas, ou estimativa por linha reta) + tempo de parada. |
 | Limite de pontos no Maps | Links encadeados de até 10 paradas (9 intermediárias + destino do trecho). O 1º link omite a origem, então o Maps usa a **localização atual**; o último termina no ponto de chegada. |
@@ -78,7 +78,8 @@ descartado) e o que a IA deixa passar cai na heurística.
 | `GEOCODER` | `nominatim` | `nominatim`, `google` (pago, opcional) ou `fake` (testes). |
 | `NOMINATIM_URL` / `NOMINATIM_RATE` | servidor público / 1 req/s | Aponte para um Nominatim próprio e suba a taxa. |
 | `MATRIX` / `OSRM_URL` | `haversine` / `http://localhost:5000` | `osrm` calcula tempos reais por ruas. |
-| `ZONE_WEIGHT` | 0,5 | 0 = só proximidade; 1 = zonas mandam. |
+| `KM_TOLERANCE` | 0,15 | Faixa de km em torno da média (±15%); 0 = tentar igualar os km. Editável na tela. |
+| `ZONE_WEIGHT` | 0,10 | Peso das zonas, de 0 a 0,15 (teto fixo: valores maiores são cortados em 0,15). |
 | `SERVICE_SECONDS` / `SOLVER_SECONDS` | 120 / 30 | Tempo por parada; orçamento de cálculo. |
 | `DELIVERY_TOLERANCE_SECONDS` | 60 | Folga somada a **cada entrega** no tempo parado (ajustável na tela, em "Ajustes da divisão"). Paradas com várias entregas recebem a folga de cada uma. |
 | `EXTRA_DELIVERY_SECONDS` | 45 | Tempo parado a mais por entrega adicional no mesmo ponto. |
@@ -93,6 +94,16 @@ descartado) e o que a IA deixa passar cai na heurística.
 - **Geocodificação gratuita é lenta.** O Nominatim público permite ~1 req/s: 900 endereços ≈ 15 min,
   2000 ≈ 35 min, e é uso pesado para um servidor gratuito. Para a rotina diária, um Nominatim próprio
   (recorte do Sul do Brasil) resolve; o app precisaria de Docker, que não está instalado nesta máquina.
+- **Igualar custa km no total.** Medido com 1400 entregas reais e 14 entregadores saindo do mesmo ponto:
+  agrupar por manchas de bairro deixa km 33–120, entregas 90–112 e tempo 5,3–8,7 h (soma ~750 km); igualar só
+  os km deixa entregas de 8 a 170; o método atual (km prioritário, 100%) deixa km 79–86 (9%), entregas 97–103
+  (6%) e tempo 7,1–7,3 h (3%), mas com ~1140 km no total (+50%) e rotas que se cruzam pela cidade, porque quem
+  moraria perto passa a rodar mais para igualar. Intensidades menores trocam equilíbrio por menos km.
+- **Tolerância na diferença de km (padrão: ±15%).** Em branco, o app tenta igualar os km. Com um valor (ex.: ±30%),
+  entregas e tempo viram o alvo e o km só é penalizado fora da faixa. Medido na mesma amostra: km igual →
+  km 76–85 (11%), entregas 5%, tempo 7%, 1119 km no total; faixa de ±30% → km 62–93 (33%), entregas 6%,
+  tempo 10%, 988 km (−12%). A maior parte do custo de km vem de equilibrar entregas e tempo (cerca de +30%
+  sobre o agrupamento por bairro); igualar também os km soma ~+12%.
 - **Km também são estimados** sem OSRM (linha reta × 1,35). Igualar km tem custo: nos 1400 endereços de
   teste a soma de km subiu ~14% e a quantidade de paradas passou a variar de 10 a 156 por entregador.
 - **Tempos por estimativa** sem OSRM (linha reta × 1,35 ÷ 28 km/h): bom para dividir regiões,

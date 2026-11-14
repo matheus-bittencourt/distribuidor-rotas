@@ -107,3 +107,20 @@ def test_tolerance_is_added_per_delivery():
     assert client.get("/api/config").json()["delivery_tolerance_seconds"] == 60
     default = _solve_total(jid)
     assert default["tolerance_seconds"] == 60 and default["drivers"][0]["total_min"] - base["drivers"][0]["total_min"] == 3
+
+
+def test_km_tolerance_is_accepted_and_reported():
+    csv = ("ENDEREÇO;NOME;COD_RASTREIO\nRua dos Andradas, 100;Ana;K1\nAvenida Ipiranga, 5000;Davi;K2\n"
+           "Rua Sarmento Leite, 200;Eva;K3\nAvenida Protásio Alves, 900;Zé;K4\n").encode()
+    jid = client.post("/api/upload", files={"file": ("l.csv", csv, "text/csv")}).json()["job_id"]
+    for _ in range(50):
+        if client.get(f"/api/jobs/{jid}").json()["state"] == "revisao":
+            break
+        time.sleep(0.1)
+    assert client.post(f"/api/jobs/{jid}/solve", json={"depot": {"address": ""}, "drivers": [{"label": "A"}], "km_tolerance": 2}).status_code == 422
+    res = _solve_total(jid, km_tolerance=0.3)
+    assert res["km_tolerance"] == 0.3
+    # padrão do app: ±15%; null explícito pede para igualar os km
+    assert client.get("/api/config").json()["km_tolerance"] == 0.15
+    assert _solve_total(jid)["km_tolerance"] == 0.15
+    assert _solve_total(jid, km_tolerance=None)["km_tolerance"] is None

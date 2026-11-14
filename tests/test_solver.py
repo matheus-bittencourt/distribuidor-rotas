@@ -44,11 +44,18 @@ def test_more_drivers_than_stops():
     assert sorted(i for route in r.routes for i in route) == [0, 1, 2]
 
 
-def test_higher_balance_narrows_spread():
+def test_higher_balance_narrows_km_spread():
     pts, starts = _data(200, 8, seed=9)
     spread = {}
     for b in (0.0, 1.0):
-        r = solve(pts, starts, DEPOT, estimated_matrix, 120, b, 8)
-        c = [len(x) for x in r.routes]
-        spread[b] = max(c) - min(c)
-    assert spread[1.0] <= spread[0.0]
+        r = solve(pts, starts, DEPOT, estimated_matrix, 120, b, 8, balance_by="km")
+        km = [sum(m) / 1000 for m in r.leg_meters]
+        spread[b] = max(km) - min(km)
+    assert spread[1.0] < spread[0.0]
+
+
+def test_stops_mode_keeps_counts_tight():
+    pts, starts = _data(200, 8, seed=9)
+    r = solve(pts, starts, DEPOT, estimated_matrix, 120, 1.0, 8, balance_by="stops")
+    c = [len(x) for x in r.routes]
+    assert max(c) - min(c) <= 8   # média 25

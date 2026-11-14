@@ -64,7 +64,9 @@ class Settings:
     ollama_model: str = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b")
     ollama_chunk: int = _i("OLLAMA_CHUNK", 20)          # linhas por pedido (modelos pequenos pedem blocos curtos)
     ollama_timeout: int = _i("OLLAMA_TIMEOUT", 900)
-    zone_weight: float = _f("ZONE_WEIGHT", 0.5)         # 0 = só proximidade; 1 = zonas manda
+    zone_weight: float = _f("ZONE_WEIGHT", 0.10)        # peso da zona (0 a 0,15): a carga vem antes
+    km_tolerance: float = _f("KM_TOLERANCE", 0.15)       # faixa de km em torno da média (±15%); 0 = igualar os km
+    zone_weight_max: float = 0.15                       # teto fixo (ver solver.MAX_ZONE_WEIGHT)
     default_city: str = os.environ.get("DEFAULT_CITY", "Porto Alegre")
     # Retenção: o job (com nomes/endereços) some da memória depois disso
     job_ttl_minutes: int = _i("JOB_TTL_MINUTES", 120)

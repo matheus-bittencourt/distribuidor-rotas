@@ -59,9 +59,11 @@ class DriverIn(BaseModel):
 class SolveIn(BaseModel):
     depot: PointIn
     drivers: list[DriverIn] = Field(min_length=1, max_length=40)
-    balance: float = Field(0.7, ge=0, le=1)       # intensidade do equilíbrio
-    balance_by: Literal["stops", "time", "km"] = "stops"  # o que é igualado entre entregadores
+    balance: float = Field(1.0, ge=0, le=1)       # até onde redistribuir para igualar a carga
+    balance_by: Literal["stops", "time", "km"] = "km"   # critério prioritário ao igualar a carga
     zone_weight: float | None = Field(None, ge=0, le=1)
+    # faixa de km em torno da média (0,15 = ±15%, o padrão); null = tentar igualar os km
+    km_tolerance: float | None = Field(SETTINGS.km_tolerance or None, ge=0, le=1)
     time_limit: int | None = Field(None, ge=5, le=300)
     service_seconds: int | None = Field(None, ge=0, le=1800)
     tolerance_seconds: int | None = Field(None, ge=0, le=1800)   # folga por entrega (padrão: 5 min)
@@ -101,6 +103,8 @@ def config():
         "delivery_tolerance_seconds": SETTINGS.delivery_tolerance_seconds,
         "solver_seconds": SETTINGS.solver_seconds,
         "zone_weight": SETTINGS.zone_weight,
+        "zone_weight_max": SETTINGS.zone_weight_max,
+        "km_tolerance": SETTINGS.km_tolerance or None,
         "maps_waypoints_per_link": SETTINGS.maps_waypoints_per_link,
         "job_ttl_minutes": SETTINGS.job_ttl_minutes,
         "saved_formats": len(templates.all_templates()),
@@ -321,7 +325,8 @@ def _run_solve(job: jobs.Job, req: SolveIn) -> None:
             service_seconds=service, balance=req.balance,
             time_limit=req.time_limit or SETTINGS.solver_seconds,
             zone_idx=zone_idx, zone_centers=zone_centers, zone_weight=zw, balance_by=req.balance_by,
-            stop_service=visit_service,
+            stop_service=visit_service, stop_deliveries=np.array([len(v) for v in visits]),
+            km_tolerance=req.km_tolerance,
         )
 
         drivers_out = []
@@ -360,7 +365,7 @@ def _run_solve(job: jobs.Job, req: SolveIn) -> None:
         shares = [(d["main_zone_share"], d["count"]) for d in drivers_out if d["count"]]
         job.result = {
             "depot": {"lat": depot[0], "lon": depot[1], "address": req.depot.address or ""},
-            "balance": req.balance, "balance_by": req.balance_by, "zone_weight": zw, "matrix": method["v"], "service_seconds": service,
+            "balance": req.balance, "balance_by": req.balance_by, "km_tolerance": req.km_tolerance, "zone_weight": zw, "matrix": method["v"], "service_seconds": service,
             "total_min": round(res.total_seconds / 60), "status": res.status,
             "deliveries": len(ok), "visits": len(visits), "extra_delivery_seconds": extra, "tolerance_seconds": tol,
             "zone_purity": round(sum(a * b for a, b in shares) / max(sum(b for _, b in shares), 1), 2),
