@@ -146,3 +146,9 @@ def test_ia_local_fora_do_ar_cai_na_heuristica(monkeypatch):
     stops, rep = extract("livre.txt", b"Ana Lima Rua das Acacias, 77\n", force_llm=None)
     assert stops[0].address == "Rua das Acacias, 77"
     assert any("indisponível" in n for n in rep.notes)
+
+
+def test_complement_removal_leaves_no_stray_commas():
+    q = to_query("Rua X, 100, Bloco B, apto 302, Bairro Y")
+    assert q == "Rua X, 100, Bairro Y, Porto Alegre, RS"
+    assert to_query("Rua X, 100, Torre 2, apto 11") == "Rua X, 100, Porto Alegre, RS"

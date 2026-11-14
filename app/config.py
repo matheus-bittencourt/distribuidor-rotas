@@ -50,6 +50,8 @@ class Settings:
     detour_factor: float = _f("DETOUR_FACTOR", 1.35)
     # Rotas
     service_seconds: int = _i("SERVICE_SECONDS", 120)  # tempo de parada em cada entrega
+    delivery_tolerance_seconds: int = _i("DELIVERY_TOLERANCE_SECONDS", 300)  # folga somada a CADA entrega
+    extra_delivery_seconds: int = _i("EXTRA_DELIVERY_SECONDS", 45)  # a cada entrega a mais no mesmo ponto
     solver_seconds: int = _i("SOLVER_SECONDS", 30)
     maps_waypoints_per_link: int = _i("MAPS_WAYPOINTS_PER_LINK", 9)
     # Ponto de partida padrão E ponto final de todas as rotas

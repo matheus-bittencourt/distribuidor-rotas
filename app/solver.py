@@ -167,9 +167,12 @@ def solve(
     zone_centers: np.ndarray | None = None,
     zone_weight: float = 0.0,
     balance_by: str = "stops",
+    stop_service: np.ndarray | None = None,
 ) -> SolveResult:
     """balance_by: o que o equilíbrio iguala entre entregadores — "stops" (quantidade de paradas),
-    "time" (tempo de rota) ou "km" (distância rodada). `balance` (0..1) é a intensidade."""
+    "time" (tempo de rota) ou "km" (distância rodada). `balance` (0..1) é a intensidade.
+    stop_service: tempo parado em cada ponto (s); padrão = service_seconds em todos. Pontos com várias
+    entregas (mesmo endereço, condomínio) levam mais tempo parado."""
     if balance_by not in BALANCE_MODES:
         raise ValueError(f"balance_by deve ser um de {BALANCE_MODES}")
     t0 = time.monotonic()
@@ -185,7 +188,7 @@ def solve(
         dist = estimated_dist_m(coords)
     depot = n + k
     service = np.zeros(len(coords), dtype=np.int64)
-    service[:n] = service_seconds
+    service[:n] = service_seconds if stop_service is None else np.asarray(stop_service, dtype=np.int64)
     cost = travel + service[:, None]          # sair do nó i = viagem + parada em i
     np.fill_diagonal(cost, 0)
 
@@ -214,10 +217,10 @@ def solve(
     avg = n / k
     if balance_by in ("time", "km") and k > 1 and balance > 0:
         mat = travel if balance_by == "time" else dist          # simétricas: o 2-opt não depende do sentido
-        per_stop = service_seconds if balance_by == "time" else 0
+        per_stop = service if balance_by == "time" else np.zeros_like(service)
         caps = np.full(k, float(math.ceil(avg)))
         for _ in range(ADAPT_ITERS):
-            metric = np.array([_nn_cost(mat, n + v, assigned[v], depot) + per_stop * len(assigned[v]) for v in range(k)], dtype=float)
+            metric = np.array([_nn_cost(mat, n + v, assigned[v], depot) + per_stop[assigned[v]].sum() for v in range(k)], dtype=float)
             ratio = metric.mean() / np.maximum(metric, 1.0)
             caps = np.clip(caps * ratio ** (1.0 * balance), 0.1 * avg, 1.9 * avg)
             int_caps = _fix_sum(caps, n)
@@ -283,5 +286,5 @@ def solve(
         routes.append(seq)
         legs.append(leg)
         meters.append([int(dist[a, b]) for a, b in zip(path, path[1:])])
-        total += sum(leg) + service_seconds * len(seq)
+        total += sum(leg) + int(service[seq].sum()) if seq else sum(leg)
     return SolveResult(routes, legs, total, status, meters)

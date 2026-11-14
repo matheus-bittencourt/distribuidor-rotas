@@ -46,3 +46,13 @@ def test_legs_in_meters_match_matrix():
 def test_unknown_mode_is_rejected():
     with pytest.raises(ValueError):
         _run("peso")
+
+
+def test_stop_service_changes_route_time():
+    pts = _uneven_city()[:60]
+    starts = np.tile(DEPOT, (3, 1))
+    svc = np.full(len(pts), 120)
+    svc[:10] = 120 + 45 * 3          # dez pontos com 4 entregas cada
+    a = solve(pts, starts, DEPOT, lambda c: (estimated_matrix(c), estimated_dist_m(c)), 120, 0.5, 4)
+    b = solve(pts, starts, DEPOT, lambda c: (estimated_matrix(c), estimated_dist_m(c)), 120, 0.5, 4, stop_service=svc)
+    assert b.total_seconds > a.total_seconds

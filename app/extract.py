@@ -382,7 +382,7 @@ def _llm_lines(lines: list[str], rep: ExtractReport, progress: Progress, provide
 
 # --------------------------------------------------------------------------- saída
 
-_COMPL = re.compile(r"\b(?:apto?|apartamento|ap|bloco|bl|sala|casa|fundos|cj|conj|loja|andar)\b\.?\s*\w*", re.I)
+_COMPL = re.compile(r"\b(?:apto?|apartamento|ap|bloco|bl|sala|casa|fundos|cj|conj|loja|andar|torre)\b\.?\s*\w*", re.I)
 _OTHER_CITIES = [c for c in RMPA_CITIES if c != "porto alegre"]
 _OTHER_CITY_RE = re.compile(
     r"[,/-]\s*(" + "|".join(re.escape(strip_accents(c)) for c in _OTHER_CITIES) + r")\b", re.I
@@ -392,6 +392,7 @@ _OTHER_CITY_RE = re.compile(
 def to_query(address: str) -> str:
     """Endereço limpo para o geocodificador: sem complemento, sempre em Porto Alegre/RS."""
     q = _COMPL.sub(" ", address.split(" - CEP")[0])
+    q = re.sub(r"\s*(,\s*)+", ", ", q)           # vírgulas soltas que sobram ao tirar apto/bloco
     q = re.sub(r"\s+", " ", q).strip(" ,")
     if "porto alegre" not in strip_accents(q).lower():
         q += f", {SETTINGS.default_city}, RS"

@@ -31,7 +31,16 @@ STATIC = Path(__file__).parent / "static"
 MAX_UPLOAD = 25 * 1024 * 1024
 
 app = FastAPI(title="Distribuidor de rotas (POC)")
-app.mount("/static", StaticFiles(directory=STATIC), name="static")
+class FreshStatic(StaticFiles):
+    """Arquivos da interface sempre revalidados: quem testa e edita não fica preso a uma versão antiga."""
+
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
+app.mount("/static", FreshStatic(directory=STATIC), name="static")
 
 
 # ------------------------------------------------------------------ esquemas
@@ -55,6 +64,7 @@ class SolveIn(BaseModel):
     zone_weight: float | None = Field(None, ge=0, le=1)
     time_limit: int | None = Field(None, ge=5, le=300)
     service_seconds: int | None = Field(None, ge=0, le=1800)
+    tolerance_seconds: int | None = Field(None, ge=0, le=1800)   # folga por entrega (padrão: 5 min)
 
 
 class StopPatch(BaseModel):
@@ -75,7 +85,7 @@ class MappingIn(BaseModel):
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC / "index.html")
+    return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/config")
@@ -87,6 +97,8 @@ def config():
         "matrix": SETTINGS.matrix,
         "llm": {"ollama": "IA local (Ollama)", "anthropic": "API Anthropic"}.get(prov, "nenhuma (heurística)"),
         "service_seconds": SETTINGS.service_seconds,
+        "extra_delivery_seconds": SETTINGS.extra_delivery_seconds,
+        "delivery_tolerance_seconds": SETTINGS.delivery_tolerance_seconds,
         "solver_seconds": SETTINGS.solver_seconds,
         "zone_weight": SETTINGS.zone_weight,
         "maps_waypoints_per_link": SETTINGS.maps_waypoints_per_link,
@@ -279,11 +291,18 @@ def _run_solve(job: jobs.Job, req: SolveIn) -> None:
             raise ValueError("Não há endereços localizados para roteirizar.")
         job.state, job.message = "calculando", "Calculando tempos de deslocamento e rotas"
 
+        # Várias entregas no mesmo ponto (casa ou condomínio) viram UMA parada: o entregador para uma vez.
+        by_point: dict[tuple[float, float], list] = {}
+        for s in ok:
+            by_point.setdefault((round(s.lat, 6), round(s.lon, 6)), []).append(s)
+        visits = list(by_point.values())
+
         zone_names, zone_centers = zones.load()
-        stop_xy = np.array([[s.lat, s.lon] for s in ok])
+        stop_xy = np.array([[v[0].lat, v[0].lon] for v in visits])
         zone_idx = zones.assign(stop_xy)
-        for s, z in zip(ok, zone_idx):
-            s.zone = zone_names[z]
+        for v, z in zip(visits, zone_idx):
+            for s in v:
+                s.zone = zone_names[z]
 
         method = {"v": ""}
 
@@ -293,39 +312,49 @@ def _run_solve(job: jobs.Job, req: SolveIn) -> None:
 
         service = SETTINGS.service_seconds if req.service_seconds is None else req.service_seconds
         zw = SETTINGS.zone_weight if req.zone_weight is None else req.zone_weight
+        extra = SETTINGS.extra_delivery_seconds
+        tol = SETTINGS.delivery_tolerance_seconds if req.tolerance_seconds is None else req.tolerance_seconds
+        # tempo parado = base da parada + extra por entrega adicional + tolerância de CADA entrega
+        visit_service = np.array([service + extra * (len(v) - 1) + tol * len(v) for v in visits], dtype=np.int64)
         res = solve(
             stop_xy, np.array(starts), np.array(depot), matrix_fn,
             service_seconds=service, balance=req.balance,
             time_limit=req.time_limit or SETTINGS.solver_seconds,
             zone_idx=zone_idx, zone_centers=zone_centers, zone_weight=zw, balance_by=req.balance_by,
+            stop_service=visit_service,
         )
 
         drivers_out = []
         for i, d in enumerate(req.drivers):
-            seq = [ok[j] for j in res.routes[i]]
+            idxs = res.routes[i]
+            seq = [visits[j] for j in idxs]
+            svc = [int(visit_service[j]) for j in idxs]
             legs, meters = res.leg_seconds[i], res.leg_meters[i]
             t, rows = 0, []
-            for order, (s, leg, leg_m) in enumerate(zip(seq, legs, meters), start=1):
+            for order, (v, leg, leg_m, sv) in enumerate(zip(seq, legs, meters, svc), start=1):
                 t += leg
+                s = v[0]
                 rows.append({
                     "order": order, "id": s.id, "name": s.name, "address": s.address, "code": s.code,
+                    "n_deliveries": len(v),
+                    "deliveries": [{"id": x.id, "name": x.name, "address": x.address, "code": x.code} for x in v],
                     "zone": s.zone, "lat": s.lat, "lon": s.lon, "leg_min": round(leg / 60, 1), "leg_km": round(leg_m / 1000, 1),
                     "eta_min": round(t / 60), "precision": s.precision,
                 })
-                t += service
+                t += sv
             travel = sum(legs)
-            zc = Counter(s.zone for s in seq).most_common()
+            zc = Counter(v[0].zone for v in seq).most_common()
             drivers_out.append({
                 "index": i, "label": d.label or f"Entregador {i + 1}",
                 "start": {"lat": starts[i][0], "lon": starts[i][1], "address": d.start.address or ""},
-                "count": len(seq), "stops": rows,
-                "travel_min": round(travel / 60), "total_min": round((travel + service * len(seq)) / 60),
+                "count": len(seq), "deliveries": sum(len(v) for v in seq), "stops": rows,
+                "travel_min": round(travel / 60), "total_min": round((travel + sum(svc)) / 60),
                 "last_leg_min": round(legs[-1] / 60, 1) if legs else 0,
                 "km": round(sum(meters) / 1000, 1),
                 "zones": [{"name": n, "count": c} for n, c in zc],
                 "main_zone_share": round(zc[0][1] / len(seq), 2) if seq else 0,
                 # sem origem no 1º link: o Maps parte da localização atual de quem abre o link
-                "links": build_links([(s.lat, s.lon) for s in seq], depot,
+                "links": build_links([(v[0].lat, v[0].lon) for v in seq], depot,
                                      per_link=SETTINGS.maps_waypoints_per_link),
             })
         shares = [(d["main_zone_share"], d["count"]) for d in drivers_out if d["count"]]
@@ -333,6 +362,7 @@ def _run_solve(job: jobs.Job, req: SolveIn) -> None:
             "depot": {"lat": depot[0], "lon": depot[1], "address": req.depot.address or ""},
             "balance": req.balance, "balance_by": req.balance_by, "zone_weight": zw, "matrix": method["v"], "service_seconds": service,
             "total_min": round(res.total_seconds / 60), "status": res.status,
+            "deliveries": len(ok), "visits": len(visits), "extra_delivery_seconds": extra, "tolerance_seconds": tol,
             "zone_purity": round(sum(a * b for a, b in shares) / max(sum(b for _, b in shares), 1), 2),
             "drivers": drivers_out,
             "unrouted": [s.public() for s in job.stops if s.status == "revisar"],
@@ -373,8 +403,9 @@ def export_csv(job_id: str, driver: int | None = None):
         if driver is not None and d["index"] != driver:
             continue
         for r in d["stops"]:
-            w.writerow([d["label"], r["order"], r["name"], r["address"], r["code"], r["zone"],
-                        r["lat"], r["lon"], r["eta_min"], r["leg_km"]])
+            for x in r["deliveries"]:  # uma linha por entrega; a ordem se repete nas entregas da mesma parada
+                w.writerow([d["label"], r["order"], x["name"], x["address"], x["code"], r["zone"],
+                            r["lat"], r["lon"], r["eta_min"], r["leg_km"]])
     return Response(
         ("﻿" + buf.getvalue()).encode("utf-8"), media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="rotas.csv"'},

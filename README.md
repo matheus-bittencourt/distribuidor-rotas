@@ -49,6 +49,8 @@ Rua y, 543;Alberto Jota;BR00123POA
 | Descartar CPF, dívida etc. | Colunas sensíveis caem pelo cabeçalho; o restante passa por regex local (CPF, CNPJ, valores, telefone, e-mail, datas, números longos) **antes** de qualquer uso de IA; a saída da IA é mascarada e conferida contra a linha original. |
 | Arquivos apagados | O arquivo nunca vai para disco. Dados só em memória, somem em 2 h ou no botão "Apagar tudo agora". |
 | Centenas de linhas, por zonas | Cada parada é associada a uma das 10 zonas da cidade (`app/zones.json`) e "puxada" para o centro dela antes do agrupamento (controle **Prioridade por zona**). Depois, k-means de tamanhos iguais + polimento global (OR-Tools). A tela mostra a zona principal de cada entregador e a % de paradas dentro dela. |
+| Enviar ao entregador | Dois botões por entregador: **Rota** (paradas na ordem, com nome, endereço e código) e **Links** (só os links do Maps, em trechos de até 10 paradas), para enviar em duas mensagens seguidas no WhatsApp. **Imprimir** gera a lista **completa** do entregador (todas as paradas e entregas, sem o corte de 10 dos links), em A4, com coluna de conferência; "Imprimir todas" põe um entregador por folha. |
+| Várias entregas no mesmo endereço | Entregas no mesmo ponto (casa ou condomínio, com Bloco/apto diferentes) viram **uma parada só**: o entregador para uma vez, o Maps não repete o ponto e o tempo parado soma `EXTRA_DELIVERY_SECONDS` (45 s) por entrega a mais. A lista e o CSV continuam com uma linha por entrega. |
 | Equilíbrio entre entregadores | Seletor **"Igualar entre os entregadores"**: quantidade de paradas, tempo de rota ou km rodados, com controle de intensidade. Em tempo/km, quem mora longe ou tem zona espalhada recebe menos paradas (capacidades dos grupos ajustadas em rodadas). Igualar km aumenta a soma de km da operação (ver limites). |
 | Início/fim | Todos saem do ponto padrão (ou da casa, se informada) e **terminam no ponto de chegada**. Entregador listado só pelo nome sai do ponto padrão. |
 | Distância por tempo | Matriz de tempos (OSRM por ruas, ou estimativa por linha reta) + tempo de parada. |
@@ -78,6 +80,8 @@ descartado) e o que a IA deixa passar cai na heurística.
 | `MATRIX` / `OSRM_URL` | `haversine` / `http://localhost:5000` | `osrm` calcula tempos reais por ruas. |
 | `ZONE_WEIGHT` | 0,5 | 0 = só proximidade; 1 = zonas mandam. |
 | `SERVICE_SECONDS` / `SOLVER_SECONDS` | 120 / 30 | Tempo por parada; orçamento de cálculo. |
+| `DELIVERY_TOLERANCE_SECONDS` | 300 | Folga somada a **cada entrega** no tempo parado (ajustável na tela, em "Ajustes da divisão"). Paradas com várias entregas recebem a folga de cada uma. |
+| `EXTRA_DELIVERY_SECONDS` | 45 | Tempo parado a mais por entrega adicional no mesmo ponto. |
 
 ## Limites conhecidos (leia antes de confiar)
 
@@ -102,6 +106,10 @@ descartado) e o que a IA deixa passar cai na heurística.
   de partida rumo à chegada), não como regra rígida.
 - **Localização atual dos entregadores** em tempo real exige um link hospedado (próximo passo); a POC
   usa o ponto padrão ou o endereço informado.
+- **Sessão sobrevive a recarregar a página.** O navegador guarda só o id do processamento (`sessionStorage`);
+  o servidor mantém lista e resultado por `JOB_TTL_MINUTES` (2 h). Reiniciar o servidor apaga tudo.
+- **Marcador de "já copiei".** O ✓ em "Copiar rota" e "Copiar links" vale só para esta tela e some ao
+  recalcular; não registra se a mensagem foi de fato enviada no WhatsApp.
 - **Elenco lembrado no navegador.** Ao calcular, nomes e casas dos entregadores e os ajustes ficam no
   `localStorage` deste navegador (nunca no servidor). "Esquecer" remove; "Apagar dados da sessão" apaga a
   lista do dia, mas não o elenco.

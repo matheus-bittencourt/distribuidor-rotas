@@ -1,8 +1,9 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
-const state = { job: null, cfg: null, map: null, routes: [], okCount: 0, result: null, texts: [], timers: {} };
+const state = { job: null, cfg: null, map: null, routes: [], okCount: 0, result: null, texts: [], sent: [], timers: {}, fromPrefs: false };
 const NS = "http://www.w3.org/2000/svg";
 const PREF_KEY = "distribuidor.prefs.v1";
+const JOB_KEY = "distribuidor.job.v1";   // só o id do processamento, para sobreviver a um recarregamento da página
 
 // ------------------------------------------------------------------ utilidades
 function icon(name) {
@@ -30,27 +31,38 @@ const api = async (path, opts) => {
 };
 const post = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const fmtMin = (m) => `${Math.floor(m / 60)}h${String(Math.round(m % 60)).padStart(2, "0")}`;
+// Duração: "8 min" até uma hora, depois "2h32" (nunca "0h08", que parece horário de relógio).
+const fmtMin = (m) => { m = Math.round(m); return m < 60 ? `${m} min` : `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}`; };
 const pct = (v) => `${Math.round(v * 100)}%`;
 const show = (id, on = true) => { $(id).hidden = !on; };
 const announce = (t) => { $("live").textContent = ""; setTimeout(() => ($("live").textContent = t), 30); };
-// Matiz por ângulo áureo e duas luminosidades alternadas: 14+ rotas continuam distinguíveis.
-const color = (i) => `hsl(${Math.round((i * 137.508) % 360)} 62% ${i % 2 ? 36 : 46}%)`;
+// Matiz por ângulo áureo e luminosidade alternada; escurece até o texto branco passar de 4,5:1.
+const _colors = [];
+const _lum = ([r, g, b]) => { const f = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };
+const _hsl = (h, s, l) => { s /= 100; l /= 100; const k = (n) => (n + h / 30) % 12, a = s * Math.min(l, 1 - l), f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1))); return [f(0), f(8), f(4)].map((x) => Math.round(x * 255)); };
+function color(i) {
+  if (_colors[i]) return _colors[i];
+  const h = Math.round((i * 137.508) % 360); let l = i % 2 ? 34 : 44;
+  while (l > 16 && 1.05 / (_lum(_hsl(h, 62, l)) + 0.05) < 4.5) l -= 2;
+  return (_colors[i] = `hsl(${h} 62% ${l}%)`);
+}
 
 function setStatus(id, text, kind = "") {
   const s = $(id); s.hidden = !text; s.textContent = text || ""; s.className = "status" + (kind ? ` ${kind}` : "");
 }
 function setStep(n) {
   document.querySelectorAll("#steps li").forEach((li) => {
-    const k = +li.dataset.step;
+    const k = +li.dataset.step, a = li.querySelector("a");
     li.className = k < n ? "done" : k === n ? "current" : "";
-    li.setAttribute("aria-current", k === n ? "step" : "false");
+    a.setAttribute("aria-current", k === n ? "step" : "false");
+    a.setAttribute("aria-disabled", k > n ? "true" : "false"); a.tabIndex = k > n ? -1 : 0;
   });
+  document.querySelectorAll("#todo li").forEach((li) => { const k = +li.dataset.step; li.className = k < n ? "done" : k === n ? "current" : ""; });
 }
 function flash(btn, text, ms = 1800) {
-  const old = btn.dataset.label || btn.textContent;
-  btn.dataset.label = old; btn.textContent = text; clearTimeout(btn._t);
-  btn._t = setTimeout(() => (btn.textContent = old), ms);
+  if (!btn._orig) btn._orig = [...btn.childNodes].map((n) => n.cloneNode(true));
+  btn.textContent = text; clearTimeout(btn._t);
+  btn._t = setTimeout(() => btn.replaceChildren(...btn._orig.map((n) => n.cloneNode(true))), ms);
 }
 // Confirmação em duas etapas, no próprio botão (sem alert/confirm nativos).
 function twoStep(btn, armedText, action) {
@@ -67,7 +79,7 @@ function savePrefs() {
   try {
     localStorage.setItem(PREF_KEY, JSON.stringify({
       drivers: $("drivers").value, n: $("n-drivers").value, by: $("balance-by").value,
-      balance: $("balance").value, zone: $("zone").value, depot: $("depot").value,
+      balance: $("balance").value, zone: $("zone").value, depot: $("depot").value, tol: $("tolerance").value,
     }));
     show("saved-note");
   } catch { /* navegação privada: segue sem lembrar */ }
@@ -93,18 +105,27 @@ async function init() {
   $("depot").value = p.depot || state.cfg.default_depot;
   if (p.drivers) { $("drivers").value = p.drivers; show("saved-note"); }
   if (p.n) $("n-drivers").value = p.n;
+  $("tolerance").value = p.tol ?? Math.round((state.cfg.delivery_tolerance_seconds ?? 300) / 60);
   if (p.by) $("balance-by").value = p.by;
   $("balance").value = p.balance ?? 0.7; $("zone").value = p.zone ?? state.cfg.zone_weight;
+  state.fromPrefs = p.by != null || p.balance != null;
   const ai = state.cfg.llm.startsWith("nenhuma") ? "sem IA: regras simples, menos precisas" : state.cfg.llm;
   $("s1ai").textContent = `PDF e texto livre: ${ai}.`;
 
-  ["balance", "zone", "balance-by", "drivers", "depot"].forEach((id) => $(id).addEventListener("input", updatePlan));
+  ["balance", "zone", "balance-by"].forEach((id) => $(id).addEventListener("input", () => { state.fromPrefs = false; }));
+  ["balance", "zone", "balance-by", "drivers", "depot", "tolerance"].forEach((id) => $(id).addEventListener("input", updatePlan));
+  // menu "Mais" fecha ao clicar fora ou com Esc
+  document.addEventListener("click", (e) => document.querySelectorAll("details.more[open]").forEach((d) => { if (!d.contains(e.target)) d.open = false; }));
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") document.querySelectorAll("details.more[open]").forEach((d) => { d.open = false; d.querySelector("summary").focus(); }); });
+  document.querySelectorAll("#steps a").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); if (a.getAttribute("aria-disabled") !== "true") $(a.hash.slice(1)).scrollIntoView({ behavior: "smooth", block: "start" }); }));
   twoStepGenerate();
   $("me").addEventListener("click", addMe);
   $("forget").addEventListener("click", forgetPrefs);
   $("map-go").addEventListener("click", sendMapping);
   $("solve").addEventListener("click", solve);
-  $("copy-all").addEventListener("click", (e) => copyText(state.texts.join("\n\n———\n\n"), e.currentTarget, "Copiar todos os textos"));
+  $("copy-all-routes").addEventListener("click", (e) => copyAll("rota", e.currentTarget, "Todas as rotas copiadas"));
+  $("copy-all-links").addEventListener("click", (e) => copyAll("links", e.currentTarget, "Todos os links copiados"));
+  $("print-all").addEventListener("click", () => printSheets(state.result.drivers, "Rotas do dia"));
   twoStep($("wipe"), "Confirmar: apagar tudo", wipe);
   $("regeo").addEventListener("click", async () => {
     $("regeo").disabled = true;
@@ -116,6 +137,22 @@ async function init() {
   ["dragleave", "drop"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
   drop.addEventListener("drop", (e) => e.dataTransfer.files[0] && upload(e.dataTransfer.files[0]));
   updatePlan();
+  const saved = (() => { try { return sessionStorage.getItem(JOB_KEY); } catch { return null; } })();
+  if (saved) await restore(saved);
+}
+
+// Recarregar a página não perde o resultado: o servidor guarda o processamento por até 2 h.
+async function restore(id) {
+  try {
+    const j = await api(`/api/jobs/${id}`);
+    state.job = id; show("wipe");
+    if (j.state === "mapear") return renderMapping(j.mapping);
+    if (j.state === "lendo" || j.state === "geocodificando") return pollIngest();
+    if (j.state === "erro") { setStatus("s1status", j.error, "err"); return; }
+    renderIngest(j);
+    if (j.state === "calculando") return awaitResult();
+    if (j.state === "pronto") renderResult(await api(`/api/jobs/${id}/result`));
+  } catch { try { sessionStorage.removeItem(JOB_KEY); } catch {} }
 }
 
 function twoStepGenerate() {
@@ -138,7 +175,7 @@ function generateList() {
 // ------------------------------------------------------------------ etapa 1: arquivo
 function resetPanels() {
   ["review-card", "s2", "s3", "map-card"].forEach((i) => show(i, false));
-  show("s1report", false); setStatus("undo", ""); setStatus("s2status", ""); setStep(1);
+  show("s1report", false); $("undo").hidden = true; $("empty-busy").hidden = true; setStatus("s2status", ""); setStep(1);
 }
 
 async function upload(file) {
@@ -148,6 +185,7 @@ async function upload(file) {
   try {
     const { job_id } = await api("/api/upload", { method: "POST", body: fd });
     state.job = job_id; show("wipe");
+    try { sessionStorage.setItem(JOB_KEY, job_id); } catch {}
     await pollIngest();
   } catch (e) { setStatus("s1status", e.message, "err"); }
 }
@@ -213,8 +251,8 @@ function renderReview(list) {
 }
 
 function offerUndo(s) {
-  const bar = $("undo"); bar.className = "status"; bar.hidden = false; bar.replaceChildren(
-    el("span", { class: "grow" }, `Descartado: ${s.name}.`),
+  const bar = $("undo"); bar.hidden = false; bar.replaceChildren(
+    el("span", {}, `Descartado: ${s.name}.`),
     el("button", { class: "link", onclick: async () => { clearTimeout(state.timers.undo); bar.hidden = true; await api(`/api/jobs/${state.job}/stops/${s.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ restore: true }) }); await refresh(); } }, "Desfazer"));
   clearTimeout(state.timers.undo); state.timers.undo = setTimeout(() => (bar.hidden = true), 10000);
 }
@@ -282,17 +320,44 @@ function parseDrivers() {
     return { label: label.trim() || `Entregador ${i + 1}`, start };
   });
 }
+// Tolerância por entrega, em minutos inteiros (0 a 30).
+const toleranceMin = () => Math.max(0, Math.min(30, Math.round(parseFloat($("tolerance").value) || 0)));
+const BY_WHAT = { stops: "o número de paradas", time: "o tempo de rota", km: "os km rodados" };
+// O valor da barra é uma proporção entre dois objetivos que puxam em direções opostas.
+function balanceScale(by) {
+  return `A barra mistura dois objetivos: 0% = só importa rodar o mínimo no total; 100% = igualar ${BY_WHAT[by]} entre os entregadores, mesmo que o total de km suba. Valores do meio dão peso aos dois.`;
+}
+function balanceNow(b) {
+  const now = b === 0 ? "sem equilíbrio: um entregador pode ficar com bem mais trabalho que outro."
+    : b < 0.4 ? "equilíbrio leve, só pequenas correções."
+    : b < 0.75 ? "equilíbrio moderado."
+    : "equilíbrio forte: rotas bem parecidas, com mais km no total.";
+  return `Agora (${pct(b)}): ${now}`;
+}
+const ZONE_SCALE = "0% = só a distância entre paradas decide; 100% = cada zona da cidade vira um bloco e só se divide entre entregadores quando é grande demais para um só. Valores do meio aproximam as paradas da mesma zona sem separá-las por completo.";
+function zoneNow(z) {
+  const now = z === 0 ? "as zonas são ignoradas."
+    : z < 0.4 ? "zonas pesam pouco."
+    : z < 0.75 ? "zonas pesam de forma moderada."
+    : "cada entregador tende a ficar numa zona só, o que pode piorar a distância.";
+  return `Agora (${pct(z)}): ${now}`;
+}
 function updatePlan() {
   const d = parseDrivers(), home = d.filter((x) => x.start.address || x.start.lat != null).length;
   const by = $("balance-by").value, b = parseFloat($("balance").value), z = parseFloat($("zone").value);
   $("balance-out").textContent = pct(b); $("zone-out").textContent = pct(z);
   $("balance").setAttribute("aria-valuetext", pct(b)); $("zone").setAttribute("aria-valuetext", pct(z));
   $("balance-help").textContent = BY_HELP[by];
-  $("adv-summary").textContent = `igualar ${BY_LABEL[by]} · ${pct(b)} · zonas ${pct(z)}`;
+  $("balance-now").textContent = balanceNow(b); $("balance-scale").textContent = balanceScale(by);
+  $("zone-now").textContent = zoneNow(z); $("zone-scale").textContent = ZONE_SCALE;
+  const tol = toleranceMin();
+  $("adv-summary").textContent = `igualar ${BY_LABEL[by]} · ${pct(b)} · zonas ${pct(z)} · tolerância ${tol} min${state.fromPrefs ? " · da última vez" : ""}`;
   $("drivers-count").textContent = d.length ? `${d.length} entregador${d.length > 1 ? "es" : ""}${home ? ` · ${home} saem de casa` : ""}` : "";
-  const stops = state.okCount ? `${state.okCount} paradas` : "paradas";
-  $("plan").textContent = d.length ? `${stops} para ${d.length} entregador${d.length > 1 ? "es" : ""}, igualando ${BY_LABEL[by]} (${pct(b)}).` : "Informe pelo menos um entregador.";
-  $("solve").disabled = !d.length || $("solve").dataset.busy === "1";
+  const stops = state.okCount ? `${state.okCount} entregas` : "entregas";
+  $("plan").textContent = !state.okCount ? "Nenhuma entrega localizada ainda: resolva os endereços para revisar."
+    : !d.length ? "Informe pelo menos um entregador."
+    : `${stops} para ${d.length} entregador${d.length > 1 ? "es" : ""}, igualando ${BY_LABEL[by]} (${pct(b)}), com ${tol} min de tolerância por entrega.`;
+  $("solve").disabled = !d.length || !state.okCount || $("solve").dataset.busy === "1";
 }
 function addMe() {
   if (!navigator.geolocation) return setStatus("s2status", "Este navegador não oferece localização.", "err");
@@ -303,94 +368,186 @@ function addMe() {
   }, () => setStatus("s2status", "Não consegui obter a localização. Verifique a permissão do navegador.", "err"));
 }
 
+async function awaitResult() {
+  for (;;) {
+    await sleep(1500);
+    const j = await api(`/api/jobs/${state.job}`);
+    if (j.state === "erro") throw new Error(j.error);
+    if (j.state === "pronto") break;
+  }
+  renderResult(await api(`/api/jobs/${state.job}/result`));
+}
+
 async function solve() {
   const drivers = parseDrivers();
   if (!drivers.length) return setStatus("s2status", "Informe pelo menos um entregador.", "err");
-  savePrefs();
+  savePrefs(); setStep(2);
   const btn = $("solve"); btn.dataset.busy = "1"; btn.disabled = true; show("s3", false);
-  const t0 = Date.now(), budget = (state.cfg.solver_seconds || 30) + 10;
-  const tick = () => setStatus("s2status", `Calculando as rotas… ${Math.round((Date.now() - t0) / 1000)} s (costuma levar até ${budget} s)`);
+  const t0 = Date.now(), budget = (state.cfg.solver_seconds || 30) + 15;
+  const tick = () => {
+    const msg = `Calculando as rotas… ${Math.round((Date.now() - t0) / 1000)} s (costuma levar até ~${budget} s)`;
+    setStatus("s2status", msg); const b = $("empty-busy"); b.hidden = false; b.textContent = msg;
+  };
   tick(); const timer = setInterval(tick, 1000);
   try {
     await post(`/api/jobs/${state.job}/solve`, {
       depot: { address: $("depot").value.trim() }, drivers, balance: parseFloat($("balance").value),
       balance_by: $("balance-by").value, zone_weight: parseFloat($("zone").value),
+      tolerance_seconds: toleranceMin() * 60,
     });
-    for (;;) {
-      await sleep(1500);
-      const j = await api(`/api/jobs/${state.job}`);
-      if (j.state === "erro") throw new Error(j.error);
-      if (j.state === "pronto") break;
-    }
+    await awaitResult();
     setStatus("s2status", "");
-    renderResult(await api(`/api/jobs/${state.job}/result`));
   } catch (e) { setStatus("s2status", e.message, "err"); }
-  finally { clearInterval(timer); btn.dataset.busy = ""; updatePlan(); }
+  finally { clearInterval(timer); $("empty-busy").hidden = true; btn.dataset.busy = ""; updatePlan(); }
 }
 
 // ------------------------------------------------------------------ etapa 3: resultado
-function whatsappText(d, depotAddr) {
-  const lines = [`*${d.label}* — ${d.count} paradas (~${fmtMin(d.total_min)}, ~${Math.round(d.km)} km)`, ""];
-  d.stops.forEach((s) => lines.push(`${s.order}. ${s.name} — ${s.address}${s.code ? ` [${s.code}]` : ""}`));
-  lines.push("", `Chegada: ${depotAddr || "ponto de chegada"}`, "", "Mapas (siga na ordem):");
-  d.links.forEach((l, i) => lines.push(`Trecho ${i + 1} (${l.first > l.last ? "última parada" : `paradas ${l.first}–${l.last}`}${l.ends_at_depot ? " → chegada" : ""}): ${l.url}`));
+const SEP = "\n\n———\n\n";
+// Mensagem 1: a rota (paradas na ordem). Mensagem 2: só os links do Maps. Enviadas em sequência.
+function routeText(d, depotAddr) {
+  const lines = [`*${d.label}* — ${d.count} paradas, ${d.deliveries} entregas (~${fmtMin(d.total_min)}, ~${Math.round(d.km)} km)`, ""];
+  const one = (x) => `${x.name} — ${x.address}${x.code ? ` [${x.code}]` : ""}`;
+  d.stops.forEach((s) => {
+    if (s.n_deliveries > 1) { lines.push(`${s.order}. ${s.n_deliveries} entregas neste endereço:`); s.deliveries.forEach((x) => lines.push(`   • ${one(x)}`)); }
+    else lines.push(`${s.order}. ${one(s)}`);
+  });
+  lines.push("", `Chegada: ${depotAddr || "ponto de chegada"}`, "", "Os links do Maps seguem na próxima mensagem.");
   return lines.join("\n");
 }
-async function copyText(text, btn, label) {
-  try { await navigator.clipboard.writeText(text); flash(btn, "Copiado", 1800); announce("Texto copiado"); }
-  catch { flash(btn, "Não foi possível copiar", 2500); }
-  btn.dataset.label = label;
+function linksText(d) {
+  const lines = [`*${d.label}* — links do Maps`, "Abra na ordem: o 1º parte da sua localização atual e cada seguinte começa onde o anterior terminou.", ""];
+  d.links.forEach((l, i) => lines.push(`Trecho ${i + 1} (${l.first > l.last ? "última parada" : `paradas ${l.first}–${l.last}`}${l.ends_at_depot ? " → chegada" : ""}):`, l.url, ""));
+  return lines.join("\n").trim();
 }
+
+// ---- cópia com estado persistente: o ✓ fica até recalcular, para o operador saber o que já mandou
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); announce("Texto copiado"); return true; }
+  catch { showCopyFallback(text); return false; }
+}
+function showCopyFallback(text) {
+  const dlg = $("copy-fallback"), ta = $("copy-fallback-text");
+  ta.value = text; dlg.showModal(); ta.focus(); ta.select();
+}
+function markCopied(btn, label) { btn.classList.add("done"); btn.replaceChildren(icon("check"), " ", label); }
+function refreshSent(i) {
+  const row = document.querySelector(`.driver[data-i="${i}"]`); if (!row) return;
+  const st = state.sent[i], chip = row.querySelector(".chip.sent");
+  if (st.rota) markCopied(row.querySelector(".copy-rota"), "Rota copiada");
+  if (st.links) markCopied(row.querySelector(".copy-links"), "Links copiados");
+  chip.hidden = !(st.rota && st.links);
+}
+async function copyKind(i, kind) {
+  if (await copyText(state.texts[i][kind])) { state.sent[i][kind] = true; refreshSent(i); }
+}
+async function copyAll(kind, btn, doneLabel) {
+  if (!(await copyText(state.texts.map((t) => t[kind]).join(SEP)))) return;
+  state.sent.forEach((st, i) => { st[kind] = true; refreshSent(i); });
+  markCopied(btn, doneLabel);
+}
+
+// ---- impressão: lista completa, sem blocos de 10
+function sheetFor(d, r) {
+  const today = new Date().toLocaleDateString("pt-BR");
+  const bodies = d.stops.map((s) => el("tbody", {}, ...s.deliveries.map((x, k) => el("tr", {},
+    k === 0 ? el("td", { class: "c-n", rowspan: String(s.deliveries.length) }, String(s.order)) : "",
+    el("td", {}, x.name), el("td", {}, x.address), el("td", {}, x.code),
+    k === 0 ? el("td", { class: "c-eta", rowspan: String(s.deliveries.length) }, fmtMin(s.eta_min)) : "",
+    el("td", { class: "c-ok" }, el("span", { class: "box" }))))));
+  return el("section", { class: "sheet" },
+    el("h1", {}, `Rota — ${d.label}`),
+    el("p", { class: "meta" }, `${today} · ${d.count} paradas · ${d.deliveries} entregas · ~${fmtMin(d.total_min)} · ~${Math.round(d.km)} km`),
+    el("p", { class: "meta" }, `Partida e chegada: ${r.depot.address || "ponto padrão"}`),
+    el("table", {}, el("thead", {}, el("tr", {}, ...["#", "Nome", "Endereço", "Rastreio", "Chega em", "Entregue"].map((h) => el("th", {}, h)))), ...bodies),
+    el("p", { class: "foot" }, "Tempos e km são estimativas. “Chega em” conta desde a saída."));
+}
+function printSheets(list, title) {
+  const area = $("print-area"), oldTitle = document.title;
+  area.replaceChildren(...list.map((d) => sheetFor(d, state.result)));
+  document.title = title;
+  const done = () => {
+    area.replaceChildren(); document.title = oldTitle; window.removeEventListener("afterprint", done);
+    if (state.map) setTimeout(() => state.map.invalidateSize(), 50);   // o mapa some durante a impressão
+  };
+  window.addEventListener("afterprint", done);
+  window.print();
+}
+
 const range = (a) => (Math.min(...a) === Math.max(...a) ? `${Math.min(...a)}` : `${Math.min(...a)}–${Math.max(...a)}`);
+const CRIT = { stops: "paradas", time: "tempo de rota", km: "km rodados" };
 
 function renderResult(r) {
   show("s3"); setStep(3);
-  const n = r.drivers.length, dr = r.drivers;
+  const n = r.drivers.length, dr = r.drivers, by = r.balance_by || "stops";
   const counts = dr.map((d) => d.count), times = dr.map((d) => d.total_min), kms = dr.map((d) => d.km);
   const total = counts.reduce((a, b) => a + b, 0), all = dr.flatMap((d) => d.stops);
   const approxN = all.filter((s) => s.precision === "aproximado").length, mostApprox = all.length && approxN / all.length > 0.5;
   const estimated = r.matrix.startsWith("estimativa");
+  const metric = (d) => (by === "km" ? d.km : by === "stops" ? d.count : d.total_min);
+  const ms = dr.map(metric), mx = Math.max(...ms), mn = Math.min(...ms);
+  const diff = mx ? Math.round(((mx - mn) / mx) * 100) : 0;
+  const verdictWord = diff <= 12 ? "bem parecidas" : diff <= 30 ? "razoavelmente parecidas" : "bem diferentes";
 
   const notes = [
     `Tempos e km ${estimated ? "estimados em linha reta (sem as ruas)" : "calculados pelas ruas"}`,
+    `tempos com ${Math.round((r.tolerance_seconds ?? 0) / 60)} min de tolerância por entrega`,
     `${pct(r.zone_purity)} das paradas ficam na zona principal do entregador`,
   ];
-  if (mostApprox) notes.push(`${approxN} de ${all.length} posições são aproximadas (só a rua foi localizada)`);
+  const multi = all.filter((s) => s.n_deliveries > 1).length;
+  if (multi) notes.push(`${multi} paradas reúnem várias entregas no mesmo endereço (casa ou condomínio)`);
   $("summary").replaceChildren(
-    el("p", { class: "headline" }, `${total} paradas em ${n} rota${n > 1 ? "s" : ""}`),
+    el("p", { class: "headline" }, `${r.deliveries} entregas em ${total} paradas · ${n} rota${n > 1 ? "s" : ""}`),
     el("dl", { class: "ranges" },
       el("div", {}, el("dt", {}, "Paradas por entregador"), el("dd", {}, range(counts))),
+      el("div", {}, el("dt", {}, "Entregas por entregador"), el("dd", {}, range(dr.map((d) => d.deliveries)))),
       el("div", {}, el("dt", {}, "Tempo por rota"), el("dd", {}, Math.min(...times) === Math.max(...times) ? fmtMin(times[0]) : `${fmtMin(Math.min(...times))}–${fmtMin(Math.max(...times))}`)),
       el("div", {}, el("dt", {}, `Km por entregador (soma ${Math.round(kms.reduce((a, b) => a + b, 0))})`), el("dd", {}, `${Math.round(Math.min(...kms))}–${Math.round(Math.max(...kms))} km`)),
     ),
+    ...(n > 1 ? [el("p", { class: `verdict ${diff <= 30 ? "ok" : "warn"}` }, `Rotas ${verdictWord} em ${CRIT[by]}: diferença de ${diff}% entre a menor e a maior.`)] : []),
     el("p", { class: "note" }, notes.join(" · ") + "."),
+    ...(mostApprox ? [el("div", { class: "status warn" }, icon("alert"),
+      el("span", {}, `${approxN} de ${all.length} posições são aproximadas: só a rua foi localizada, então o ponto pode estar a algumas quadras. A ordem das paradas continua valendo.`))] : []),
     ...(r.unrouted.length ? [el("div", { class: "status warn" }, icon("alert"),
       el("span", {}, `${r.unrouted.length} entrega${r.unrouted.length > 1 ? "s ficaram" : " ficou"} de fora. Resolva em “Endereços para revisar” e calcule de novo.`))] : []),
   );
   $("legend").textContent = "Cada cor é uma rota e o número marca a primeira parada dela. Círculo grande = partida; pino azul = chegada. Linhas retas, não as ruas.";
   $("csv-all").href = `/api/jobs/${state.job}/export.csv`;
-  state.texts = dr.map((d) => whatsappText(d, r.depot.address));
+  state.texts = dr.map((d) => ({ rota: routeText(d, r.depot.address), links: linksText(d) }));
+  state.sent = dr.map(() => ({ rota: false, links: false }));
+  state.result = r;
+  for (const [id, label] of [["copy-all-routes", "Copiar todas as rotas"], ["copy-all-links", "Copiar todos os links"]]) {
+    const b = $(id); b.classList.remove("done"); b.replaceChildren(icon("copy"), " ", label);
+  }
   drawMap(r);
 
-  const maxTime = Math.max(...times, 1), box = $("drivers-out"); box.replaceChildren();
+  const maxM = Math.max(...ms, 1), box = $("drivers-out"); box.replaceChildren();
   dr.forEach((d, i) => {
     const body = el("div", { class: "body", hidden: "", id: `body-${i}` });
-    const toggle = el("button", { class: "ghost", "aria-expanded": "false", "aria-controls": `body-${i}` }, "Paradas ", icon("chevron"));
+    const toggle = el("button", { class: "dtoggle", "aria-expanded": "false", "aria-controls": `body-${i}` }, el("strong", {}, d.label), icon("chevron"));
     toggle.addEventListener("click", () => {
       const open = toggle.getAttribute("aria-expanded") === "true";
       if (!open && !body.childElementCount) fillBody(body, d, mostApprox);
       toggle.setAttribute("aria-expanded", String(!open)); body.hidden = open;
     });
-    const copy = el("button", { class: "ghost" }, icon("copy"), " Copiar WhatsApp");
-    copy.addEventListener("click", () => copyText(state.texts[i], copy, "Copiar WhatsApp"));
+    const copyRoute = el("button", { class: "ghost copy-rota", "aria-label": `Copiar a mensagem da rota de ${d.label} para o WhatsApp` }, icon("copy"), " Copiar rota");
+    const copyLinks = el("button", { class: "ghost copy-links", "aria-label": `Copiar a mensagem com os links do Maps de ${d.label} para o WhatsApp` }, icon("copy"), " Copiar links");
+    copyRoute.addEventListener("click", () => copyKind(i, "rota"));
+    copyLinks.addEventListener("click", () => copyKind(i, "links"));
+    const more = el("details", { class: "more" },
+      el("summary", { "aria-label": `Mais ações de ${d.label}` }, "Mais", icon("chevron")),
+      el("div", { class: "menu" },
+        el("button", { onclick: () => { more.open = false; printSheets([d], `Rota ${d.label}`); } }, icon("print"), " Imprimir lista completa"),
+        el("a", { href: d.links[0].url, target: "_blank", rel: "noopener", onclick: () => (more.open = false) }, icon("map"), " Abrir trecho 1 no Maps (nova aba)"),
+        el("a", { href: `/api/jobs/${state.job}/export.csv?driver=${d.index}`, onclick: () => (more.open = false) }, icon("download"), " CSV desta rota")));
+    const zoneTxt = d.zones[0] ? `${d.zones[0].name}${d.zones.length > 1 ? ` +${d.zones.length - 1}` : ""}` : "sem paradas";
     const head = el("div", { class: "dhead" },
       el("span", { class: "swatch", style: `background:${color(i)}` }, String(i + 1)),
-      el("div", { class: "dname" }, el("strong", {}, d.label), el("span", { class: "zone" }, d.zones[0] ? `${d.zones[0].name}${d.zones.length > 1 ? ` +${d.zones.length - 1}` : ""}` : "sem paradas")),
-      el("div", { class: "dnums" }, el("span", {}, `${d.count} paradas`), el("span", {}, fmtMin(d.total_min)), el("span", {}, `${Math.round(d.km)} km`)),
-      el("div", { class: "bar", role: "img", "aria-label": `Tempo de ${d.label} em relação à rota mais longa: ${Math.round((d.total_min / maxTime) * 100)}%`, style: `--bar:${color(i)}` }, el("i", { style: `width:${(d.total_min / maxTime) * 100}%` })),
-      el("div", { class: "dact" }, copy, el("a", { class: "btn ghost", href: d.links[0].url, target: "_blank", rel: "noopener" }, icon("map"), " Maps 1"), toggle),
+      el("div", { class: "dname" }, toggle, el("span", { class: "zone" }, zoneTxt, el("span", { class: "chip sent", hidden: "" }, "rota e links copiados"))),
+      el("div", { class: "dnums" }, el("span", {}, `${d.count} paradas · ${d.deliveries} entregas`), el("span", {}, fmtMin(d.total_min)), el("span", {}, `${Math.round(d.km)} km`)),
+      el("div", { class: "bar", role: "img", "aria-label": `${d.label}: ${CRIT[by]} em relação à maior rota, ${Math.round((metric(d) / maxM) * 100)}%`, style: `--bar:${color(i)}` }, el("i", { style: `width:${(metric(d) / maxM) * 100}%` })),
+      el("div", { class: "dact" }, copyRoute, copyLinks, more),
     );
-    const row = el("article", { class: "driver" }, head, body);
+    const row = el("article", { class: "driver", "data-i": String(i) }, head, body);
     head.addEventListener("mouseenter", () => highlight(i)); head.addEventListener("mouseleave", () => highlight(null));
     head.addEventListener("focusin", () => highlight(i)); head.addEventListener("focusout", () => highlight(null));
     box.append(row);
@@ -401,14 +558,16 @@ function renderResult(r) {
 function fillBody(body, d, mostApprox) {
   const links = el("div", { class: "links" }, ...d.links.map((l, k) =>
     el("a", { href: l.url, target: "_blank", rel: "noopener" },
-      l.first > l.last ? `Maps trecho ${k + 1} · última parada → chegada` : `Maps trecho ${k + 1} · paradas ${l.first}–${l.last}${l.ends_at_depot ? " → chegada" : ""}`)));
+      l.first > l.last ? `Trecho ${k + 1} · última parada → chegada` : `Trecho ${k + 1} · paradas ${l.first}–${l.last}${l.ends_at_depot ? " → chegada" : ""}`)));
   const rows = d.stops.map((s) => el("tr", {},
-    el("td", { class: "num c-n" }, s.order), el("td", { class: "c-name" }, s.name),
-    el("td", { class: "c-addr" }, s.address, !mostApprox && s.precision === "aproximado" ? el("span", { class: "approx" }, " ", icon("alert"), " aproximada") : ""),
-    el("td", { class: "c-code" }, s.code),
+    el("td", { class: "num c-n" }, s.order, s.n_deliveries > 1 ? el("span", { class: "badge" }, `${s.n_deliveries}×`) : ""),
+    el("td", { class: "c-name" }, s.n_deliveries > 1 ? s.deliveries.map((x) => el("div", {}, x.name)) : s.name),
+    el("td", { class: "c-addr" }, s.n_deliveries > 1 ? s.deliveries.map((x) => el("div", {}, x.address)) : s.address,
+      !mostApprox && s.precision === "aproximado" ? el("span", { class: "approx" }, " ", icon("alert"), " aproximada") : ""),
+    el("td", { class: "c-code" }, s.n_deliveries > 1 ? s.deliveries.map((x) => el("div", {}, x.code)) : s.code),
     el("td", { class: "num c-leg" }, `+${Math.round(s.leg_min)} min · ${s.leg_km.toFixed(1)} km`),
     el("td", { class: "num c-eta" }, fmtMin(s.eta_min))));
-  body.append(links, el("div", { class: "actions" }, el("a", { class: "btn ghost", href: `/api/jobs/${state.job}/export.csv?driver=${d.index}` }, icon("download"), " CSV desta rota")),
+  body.append(el("p", { class: "hint" }, "Links do Maps (abra na ordem):"), links,
     el("table", { class: "stops" },
       el("thead", {}, el("tr", {}, ...["#", "Nome", "Endereço", "Rastreio", "Trecho", "Chega em"].map((h, k) => el("th", { class: [0, 4, 5].includes(k) ? "num" : "" }, h)))),
       el("tbody", {}, rows)));
@@ -439,7 +598,14 @@ function drawMap(r) {
   });
   const end = L.marker([r.depot.lat, r.depot.lon]).bindTooltip("Chegada").addTo(state.map);
   state.routes.push({ line: null, dots: [], layers: [end] });
-  requestAnimationFrame(() => { state.map.invalidateSize(); state.map.fitBounds(all, { padding: [20, 20] }); });
+  // Enquadra assim que o mapa tiver tamanho real (o painel acabou de aparecer e o layout ainda assenta).
+  state.fitPending = all;
+  const fit = () => {
+    if (!state.fitPending || !$("map").clientWidth) return;
+    state.map.invalidateSize(); state.map.fitBounds(state.fitPending, { padding: [20, 20] }); state.fitPending = null;
+  };
+  if (!state.mapObserver) { state.mapObserver = new ResizeObserver(fit); state.mapObserver.observe($("map")); }
+  requestAnimationFrame(fit); setTimeout(fit, 300);
 }
 function highlight(i) {
   state.routes.forEach((o, k) => {
@@ -454,7 +620,8 @@ function highlight(i) {
 async function wipe() {
   if (!state.job) return;
   await api(`/api/jobs/${state.job}`, { method: "DELETE" }).catch(() => {});
-  state.job = null; state.okCount = 0; state.result = null; state.texts = [];
+  state.job = null; state.okCount = 0; state.result = null; state.texts = []; state.sent = [];
+  try { sessionStorage.removeItem(JOB_KEY); } catch {}
   state.routes.forEach((o) => o.layers.forEach((l) => l.remove())); state.routes = [];
   resetPanels(); show("wipe", false);
   setStatus("s1status", "Pronto: lista, nomes, endereços e rotas foram apagados da memória. O elenco salvo neste navegador não foi tocado.", "ok");
