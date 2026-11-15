@@ -951,7 +951,7 @@ function renderLegend(r) {
   state.focusRoute = null;
   $("map-legend").replaceChildren(...r.drivers.map((d, i) => {
     const b = el("button", { type: "button", class: "lg", "aria-pressed": "false" },
-      el("span", { class: "swatch", style: `background:${color(i)}`, "aria-hidden": "true" }, String(i + 1)), d.label);
+      el("span", { class: "swatch", style: `background:${color(i)}`, "aria-hidden": "true" }, String(i + 1)), el("span", { class: "lg-name" }, d.label));
     b.addEventListener("click", () => {
       state.focusRoute = state.focusRoute === i ? null : i;
       $("map-legend").querySelectorAll(".lg").forEach((x, k) => x.setAttribute("aria-pressed", String(k === state.focusRoute)));
