@@ -13,3 +13,9 @@ mapdata/
 preferencias.json
 .claude/
 .impeccable/
+
+# vídeo (Remotion)
+video/node_modules/
+video/out/
+video/.tts/
+video/.env*

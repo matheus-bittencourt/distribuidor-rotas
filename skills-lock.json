@@ -1,0 +1,41 @@
+{
+  "version": 2,
+  "skills": {
+    "music": {
+      "source": "elevenlabs/skills",
+      "sourceType": "github",
+      "skillPath": "music/SKILL.md",
+      "computedHash": "526c5156d1c711c459c6ad8688a8bee245a6605545a59c0c46decc948337a701"
+    },
+    "remotion-best-practices": {
+      "source": "remotion-dev/skills",
+      "sourceType": "github",
+      "skillPath": "skills/remotion-best-practices/SKILL.md",
+      "computedHash": "55e6029eeafb7f64bfcaef013f7b9f569dfcc4db6554c6d6fb833ad141ec1494"
+    },
+    "remotion-multimedia": {
+      "source": "remotion-dev/skills",
+      "sourceType": "github",
+      "skillPath": "skills/remotion-multimedia/SKILL.md",
+      "computedHash": "5d0d2d40329e899b854db1eebb462faa8e5ce26b7a13436973699c4a7ff79846"
+    },
+    "setup-api-key": {
+      "source": "elevenlabs/skills",
+      "sourceType": "github",
+      "skillPath": "setup-api-key/SKILL.md",
+      "computedHash": "a7861a506946fe70b8026bb84c427399d440fe20a030ce96704bd4704f1304ba"
+    },
+    "sound-effects": {
+      "source": "elevenlabs/skills",
+      "sourceType": "github",
+      "skillPath": "sound-effects/SKILL.md",
+      "computedHash": "5c0a1d653194633986f9887c599f3f98c595bce0fcb0e16dc5d90935ec65a6df"
+    },
+    "text-to-speech": {
+      "source": "elevenlabs/skills",
+      "sourceType": "github",
+      "skillPath": "text-to-speech/SKILL.md",
+      "computedHash": "fec523d1f12af3c06c94783129f2d556fafc9309ee3f13578170f7ef33c5f97e"
+    }
+  }
+}

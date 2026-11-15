@@ -1,0 +1,27 @@
+{
+  "name": "distribuidor-rotas-video",
+  "private": true,
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts Video out/video.mp4",
+    "preview": "remotion render src/index.ts Video out/preview.mp4 --scale=0.5 --crf=32",
+    "preview:reels": "remotion render src/index.ts Reels out/preview-reels.mp4 --scale=0.5 --crf=32",
+    "render:reels": "remotion render src/index.ts Reels out/reels.mp4",
+    "audio": ".tts\\Scripts\\python scripts\u000boz.py && .tts\\Scripts\\python scripts\\som.py",
+    "audio:elevenlabs": "node --env-file-if-exists=.env.local --env-file-if-exists=.env scripts/elevenlabs.mjs"
+  },
+  "dependencies": {
+    "@elevenlabs/elevenlabs-js": "2.78.0",
+    "@remotion/cli": "4.0.543",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "remotion": "4.0.543"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "typescript": "^7.0.2"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true
+  }
+}
