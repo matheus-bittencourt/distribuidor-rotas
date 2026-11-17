@@ -128,7 +128,7 @@
   </section>
 
   <section class="panel" id="s2" hidden>
-    <h2>Entregadores, partida e chegada</h2>
+    <h2 tabindex="-1">Entregadores, partida e chegada</h2>
     <p class="lede">Defina de onde todos saem e voltam e quem entrega. Depois, calcule.</p>
 
     <label class="field">Ponto de partida padrão e de chegada
@@ -136,12 +136,13 @@
     </label>
 
     <label class="field" for="drivers">Entregadores, um por linha
-      <span class="hint">Só o nome: sai do ponto padrão. <code>Nome; endereço ou lat, lon</code>: sai de casa. Todos chegam ao ponto de chegada. Com telefone (<code>Nome; 51 99999-0000</code>), o app abre a conversa do WhatsApp já com a mensagem; o telefone fica só neste navegador.</span>
+      <span class="hint first-use">Só o nome: sai do ponto padrão. <code>Nome; endereço ou lat, lon</code>: sai de casa. Todos chegam ao ponto de chegada. Com telefone (<code>Nome; 51 99999-0000</code>), o app abre a conversa do WhatsApp já com a mensagem; o telefone fica só neste navegador.</span>
+      <span class="hint seasoned-only">Formato: <code>Nome; endereço ou lat, lon; telefone</code>, cada parte opcional.</span>
     </label>
     <textarea id="drivers" rows="6" spellcheck="false" placeholder="Ana&#10;Bruno; Rua Exemplo, 100, Bairro, Porto Alegre&#10;Carla; -30.0500, -51.1800"></textarea>
     <div class="actions tight">
       <span class="inline"><label class="sr" for="n-drivers">Quantidade</label><input id="n-drivers" type="number" min="1" max="40" value="14"><button id="gen" class="ghost">Gerar lista</button></span>
-      <button id="me" class="ghost">Usar minha localização</button>
+      <button id="me" class="ghost">Adicionar entregador na minha localização</button>
       <span id="drivers-count" class="hint"></span>
     </div>
     <p id="saved-note" class="hint" hidden>Elenco lembrado neste navegador. <button id="forget" class="link">Esquecer</button></p>
@@ -151,7 +152,7 @@
       <div class="adv-body">
         <fieldset class="presets">
           <legend>Como dividir</legend>
-          <label class="preset"><input type="radio" name="preset" value="carga"> <span><strong>Carga parecida</strong><span class="muted">Km, entregas e tempo bem próximos entre os entregadores.</span></span></label>
+          <label class="preset"><input type="radio" name="preset" value="carga"> <span><strong>Carga parecida</strong><span class="muted">Iguala entregas e tempo; o km fica a até ±15% da média.</span></span></label>
           <label class="preset"><input type="radio" name="preset" value="km"> <span><strong>Menos km no total</strong><span class="muted">Agrupa por proximidade; a carga pode variar mais.</span></span></label>
           <label class="preset"><input type="radio" name="preset" value="custom"> <span><strong>Personalizado</strong><span class="muted">Escolha cada ajuste.</span></span></label>
         </fieldset>
@@ -211,7 +212,7 @@
       <div class="sendbar-status">
         <strong id="sent-count"></strong>
         <div class="meter" aria-hidden="true"><i id="sent-meter"></i></div>
-        <span class="muted">Cada entregador recebe duas mensagens, nesta ordem: a rota e depois os links do Maps. Com telefone na lista de entregadores, o botão abre a conversa já com a mensagem. Atalho: tecla <kbd>C</kbd>.</span>
+        <span class="muted first-use">Cada entregador recebe duas mensagens, nesta ordem: a rota e depois os links do Maps. Com telefone na lista de entregadores, o botão abre a conversa já com a mensagem.<span class="kbd-hint"> Atalho: tecla <kbd>C</kbd>.</span></span>
         <p class="sent-last" id="sent-last" role="status"></p>
       </div>
       <div class="sendbar-actions">
@@ -266,12 +267,11 @@
   <label class="check small"><input type="checkbox" id="map-check"> Procurar atualização do mapa ao abrir</label>
 </footer>
 
-<div id="undo" class="toast" role="status" hidden></div>
-<dialog id="copy-fallback">
+<dialog id="copy-fallback" aria-labelledby="copy-fallback-title">
   <form method="dialog">
-    <h2>Copie manualmente</h2>
-    <p class="hint">O navegador bloqueou a cópia automática. O texto está selecionado: use Ctrl+C.</p>
-    <textarea id="copy-fallback-text" readonly rows="12"></textarea>
+    <h2 id="copy-fallback-title">Copie manualmente</h2>
+    <p class="hint" id="copy-fallback-hint">O navegador bloqueou a cópia automática. O texto está selecionado: use Ctrl+C.</p>
+    <textarea id="copy-fallback-text" readonly rows="12" aria-labelledby="copy-fallback-title" aria-describedby="copy-fallback-hint"></textarea>
     <div class="actions"><button class="primary" value="close">Fechar</button></div>
   </form>
 </dialog>

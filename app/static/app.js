@@ -36,11 +36,16 @@ const fmtMin = (m) => { m = Math.round(m); return m < 60 ? `${m} min` : `${Math.
 const pct = (v) => `${Math.round(v * 100)}%`;
 const show = (id, on = true) => { $(id).hidden = !on; };
 const announce = (t) => { $("live").textContent = ""; setTimeout(() => ($("live").textContent = t), 30); };
-// Matiz por ângulo áureo e luminosidade alternada; escurece até o texto branco passar de 4,5:1.
+// Cores das rotas: 14 famílias diferentes escolhidas à mão (nada de três verdes seguidos), em ordem que
+// afasta as parecidas (azul, marinho e anil ficam longe um do outro). Todas com texto branco ≥4,5:1.
+// Acima de 14 entregadores: matiz por ângulo áureo, escurecida até o branco passar de 4,5:1.
+const PALETTE = ["#1d4ed8", "#c2410c", "#15803d", "#7e22ce", "#b91c1c", "#0e7490", "#a21caf",
+  "#78350f", "#be185d", "#4d7c0f", "#1e3a8a", "#475569", "#0f766e", "#4338ca"];
 const _colors = [];
 const _lum = ([r, g, b]) => { const f = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };
 const _hsl = (h, s, l) => { s /= 100; l /= 100; const k = (n) => (n + h / 30) % 12, a = s * Math.min(l, 1 - l), f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1))); return [f(0), f(8), f(4)].map((x) => Math.round(x * 255)); };
 function color(i) {
+  if (i < PALETTE.length) return PALETTE[i];
   if (_colors[i]) return _colors[i];
   const h = Math.round((i * 137.508) % 360); let l = i % 2 ? 34 : 44;
   while (l > 16 && 1.05 / (_lum(_hsl(h, 62, l)) + 0.05) < 4.5) l -= 2;
@@ -56,6 +61,8 @@ function setStep(n) {
     li.className = k < n ? "done" : k === n ? "current" : "";
     a.setAttribute("aria-current", k === n ? "step" : "false");
     a.setAttribute("aria-disabled", k > n ? "true" : "false"); a.tabIndex = k > n ? -1 : 0;
+    // etapa ainda fechada: diz o que falta, em vez de só aparecer apagada
+    a.title = k > n ? (k === 2 ? "Disponível depois de carregar a lista do dia" : "Disponível depois de calcular as rotas") : "";
   });
 }
 function flash(btn, text, ms = 1800) {
@@ -89,6 +96,15 @@ function savePrefs() {
     show("saved-note");
   } catch { /* navegação privada: segue sem lembrar */ }
 }
+// Depois do primeiro envio completo (todos com rota e links), as dicas de primeiro uso recolhem.
+// A ajuda continua a um clique: "Como usar", "Como ler esta tela" e os resumos curtos.
+const SEASON_KEY = "distribuidor.experiente.v1";
+function seasoned() { try { return localStorage.getItem(SEASON_KEY) === "1"; } catch { return false; } }
+function markSeasoned() {
+  if (seasoned()) return;
+  try { localStorage.setItem(SEASON_KEY, "1"); } catch {}
+  document.body.classList.add("seasoned");
+}
 function forgetPrefs() { try { localStorage.removeItem(PREF_KEY); } catch {} $("drivers").value = ""; show("saved-note", false); updatePlan(); }
 
 // ------------------------------------------------------------------ início
@@ -107,6 +123,7 @@ const MASKED = { cpf: "CPF", cnpj: "CNPJ", valor: "valores", telefone: "telefone
 async function init() {
   try { history.scrollRestoration = "manual"; } catch {}   // o app decide onde a tela começa (ex.: nas rotas)
   if (matchMedia("(pointer: coarse)").matches) document.querySelector("#drop strong").textContent = "Escolha o arquivo";   // no celular não se arrasta
+  document.body.classList.toggle("seasoned", seasoned());
   state.cfg = await api("/api/config");
   const p = loadPrefs();
   $("depot").value = p.depot || state.cfg.default_depot;
@@ -177,7 +194,8 @@ const SAMPLE_CSV = [
 const WIDE = matchMedia("(min-width: 1180px)");
 function placeGuide() {
   const g = $("guide"); if (!g || !g.dataset.ready) return;
-  const home = WIDE.matches && !document.body.classList.contains("has-result");
+  // só sem lista aberta: com lista, a coluna larga é da revisão e dos entregadores
+  const home = WIDE.matches && !document.body.classList.contains("has-result") && !document.body.classList.contains("has-job");
   const where = home ? $("guide-home") : $("guide-top");
   if (g.parentElement !== where.parentElement || g.previousElementSibling !== where) where.after(g);
   g.classList.toggle("in-home", home);
@@ -300,25 +318,28 @@ async function downloadMap() {
 async function restore(id) {
   try {
     const j = await api(`/api/jobs/${id}`);
-    state.job = id; show("wipe");
+    state.job = id; show("wipe"); setHasJob(true);
     if (j.state === "mapear") return renderMapping(j.mapping);
     if (j.state === "lendo" || j.state === "geocodificando") return pollIngest();
     if (j.state === "erro") { setStatus("s1status", j.error, "err"); return; }
     renderIngest(j);
     if (j.state === "calculando") return awaitResult();
     if (j.state === "pronto") renderResult(await api(`/api/jobs/${id}/result`));
-  } catch { try { sessionStorage.removeItem(JOB_KEY); } catch {} }
+  } catch { state.job = null; setHasJob(false); show("wipe", false); try { sessionStorage.removeItem(JOB_KEY); } catch {} }
 }
 
+// Mesmo comportamento das outras confirmações (twoStep): sem prazo; desarma ao sair do botão ou com Esc.
+// Com a lista vazia não há o que perder, então gera direto.
 function twoStepGenerate() {
   const nb = $("gen");
+  const disarm = () => { if (nb.classList.contains("armed")) { nb.classList.remove("armed"); nb.textContent = "Gerar lista"; } };
   nb.addEventListener("click", () => {
-    if (!$("drivers").value.trim() || nb.classList.contains("armed")) {
-      nb.classList.remove("armed"); nb.textContent = "Gerar lista"; return generateList();
-    }
+    if (!$("drivers").value.trim() || nb.classList.contains("armed")) { disarm(); return generateList(); }
     nb.classList.add("armed"); nb.textContent = "Substituir a lista atual?";
-    clearTimeout(nb._arm); nb._arm = setTimeout(() => { nb.classList.remove("armed"); nb.textContent = "Gerar lista"; }, 4000);
+    announce("Substituir a lista atual? Clique de novo para confirmar, ou Esc para cancelar.");
   });
+  nb.addEventListener("blur", () => setTimeout(disarm, 150));
+  nb.addEventListener("keydown", (e) => { if (e.key === "Escape") disarm(); });
 }
 
 function generateList() {
@@ -328,10 +349,18 @@ function generateList() {
 }
 
 // ------------------------------------------------------------------ etapa 1: arquivo
+// Com uma lista aberta, a área de envio encolhe para uma linha (trocar o arquivo) e a tela larga
+// passa a ser do trabalho: revisão e entregadores, sem o tutorial ao lado.
+function setHasJob(on) {
+  document.body.classList.toggle("has-job", on);
+  const coarse = matchMedia("(pointer: coarse)").matches;
+  document.querySelector("#drop strong").textContent = on ? "Trocar o arquivo" : coarse ? "Escolha o arquivo" : "Escolha ou arraste o arquivo";
+  placeGuide();
+}
 function resetPanels() {
   state.result = null; state.sent = []; document.body.classList.remove("has-result"); placeGuide();
   ["review-card", "s2", "s3", "map-card"].forEach((i) => show(i, false));
-  show("s1report", false); $("undo").hidden = true; $("empty-busy").hidden = true; setStatus("s2status", ""); setStep(1);
+  show("s1report", false); state.lastDiscard = null; $("empty-busy").hidden = true; setStatus("s2status", ""); setStep(1);
 }
 
 async function upload(file) {
@@ -340,7 +369,7 @@ async function upload(file) {
   const fd = new FormData(); fd.append("file", file);
   try {
     const { job_id } = await api("/api/upload", { method: "POST", body: fd });
-    state.job = job_id; show("wipe");
+    state.job = job_id; show("wipe"); setHasJob(true);
     try { sessionStorage.setItem(JOB_KEY, job_id); } catch {}
     await pollIngest();
   } catch (e) { setStatus("s1status", e.message, "err"); }
@@ -367,7 +396,7 @@ function renderIngest(j) {
   box.append(
     el("div", { class: "chips" },
       chip(`${c.ok || 0} localizados`, "ok"),
-      chip(`${c.revisar || 0} para revisar`, c.revisar ? "warn" : ""),
+      ...(c.revisar ? [chip(`${c.revisar} para revisar`, "warn")] : []),
       chip(`leitura: ${METHOD[r.method] || r.method}`),
       ...r.dropped_columns.map((d) => chip(`coluna ignorada: ${d}`)),
       ...Object.entries(r.masked).map(([k, v]) => chip(`${v} ${MASKED[k] || k} removidos do texto`)),
@@ -383,39 +412,60 @@ function renderIngest(j) {
 async function refresh() { renderIngest(await api(`/api/jobs/${state.job}`)); }
 
 function renderReview(list) {
-  show("review-card", list.length > 0);
+  const undo = state.lastDiscard;
+  show("review-card", list.length > 0 || !!undo);
   $("review-count").textContent = `(${list.length})`;
   const box = $("review-list"); box.replaceChildren();
-  for (const s of list) {
+  list.forEach((s, idx) => {
+    if (undo && undo.index === idx) box.append(undoRow(undo));
     const addr = el("input", { type: "text", value: s.address, "aria-label": `Endereço de ${s.name}` });
     const coords = el("input", { type: "text", placeholder: "lat, lon do Google Maps", "aria-label": `Coordenadas de ${s.name}` });
     const err = el("div", { class: "err", role: "alert", hidden: "" });
-    const act = async (body, after) => {
-      try { await api(`/api/jobs/${state.job}/stops/${s.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); if (after) after(); await refresh(); }
-      catch (e) { err.textContent = e.message; err.hidden = false; }
+    // Depois de cada ação a lista é refeita: o foco vai para a próxima entrega (ou para o que sobrar),
+    // em vez de cair no começo da página.
+    const act = async (body, msg, discard) => {
+      try {
+        await api(`/api/jobs/${state.job}/stops/${s.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        state.lastDiscard = discard ? { s, index: idx } : null;
+        await refresh();
+        focusReview(idx, discard);
+        announce(msg);
+      } catch (e) { err.textContent = e.message; err.hidden = false; }   // o foco fica no botão usado
     };
     // Lista vinda do PDF de intimações: em que página está e um atalho para ver o original
     const pg = s.pages && s.pages.length ? el("div", { class: "where" },
       `PDF: página ${s.pages[0]}${s.pages.length > 1 ? `–${s.pages[s.pages.length - 1]}` : ""}`,
       s.code ? ` · ${s.code}` : "", " · ",
       el("a", { href: `/api/jobs/${state.job}/paginas.pdf?stop=${s.id}`, target: "_blank", rel: "noopener" }, "ver no PDF (nova aba)")) : null;
-    box.append(el("div", { class: "row" },
+    box.append(el("div", { class: "row", "data-id": String(s.id) },
       el("div", {}, el("div", { class: "who" }, s.name), el("div", { class: "why" }, s.reason), ...(pg ? [pg] : [])),
       addr, coords,
       el("div", { class: "btns" },
-        el("button", { onclick: () => act({ address: addr.value }) }, "Buscar"),
-        el("button", { onclick: () => (coords.value.trim() ? act({ coords: coords.value }) : ((err.textContent = "Cole as coordenadas no formato lat, lon."), (err.hidden = false))) }, "Usar coords"),
-        el("button", { class: "ghost danger", onclick: () => act({ discard: true }, () => offerUndo(s)) }, "Descartar")),
+        el("button", { onclick: () => act({ address: addr.value }, `Endereço de ${s.name} procurado de novo`) }, "Buscar"),
+        el("button", { onclick: () => (coords.value.trim() ? act({ coords: coords.value }, `Coordenadas de ${s.name} usadas`) : ((err.textContent = "Cole as coordenadas no formato lat, lon."), (err.hidden = false), coords.focus())) }, "Usar coords"),
+        el("button", { class: "ghost danger", onclick: () => act({ discard: true }, `${s.name} descartado. O botão Desfazer está no lugar da entrega.`, true) }, "Descartar")),
       err,
     ));
-  }
+  });
+  if (undo && undo.index >= list.length) box.append(undoRow(undo));
 }
 
-function offerUndo(s) {
-  const bar = $("undo"); bar.hidden = false; bar.replaceChildren(
-    el("span", {}, `Descartado: ${s.name}.`),
-    el("button", { class: "link", onclick: async () => { clearTimeout(state.timers.undo); bar.hidden = true; await api(`/api/jobs/${state.job}/stops/${s.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ restore: true }) }); await refresh(); } }, "Desfazer"));
-  clearTimeout(state.timers.undo); state.timers.undo = setTimeout(() => (bar.hidden = true), 10000);
+// O desfazer fica no lugar da entrega descartada até a próxima ação na lista (sem prazo).
+function undoRow(u) {
+  return el("div", { class: "row undone" },
+    el("span", {}, `Descartado: ${u.s.name}.`),
+    el("button", { class: "link", onclick: async () => {
+      await api(`/api/jobs/${state.job}/stops/${u.s.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ restore: true }) });
+      state.lastDiscard = null; await refresh();
+      $("review-list").querySelector(`.row[data-id="${u.s.id}"] input`)?.focus();
+      announce(`${u.s.name} voltou para a revisão`);
+    } }, "Desfazer"));
+}
+function focusReview(idx, discarded) {
+  const rows = [...$("review-list").querySelectorAll(".row:not(.undone)")];
+  const target = discarded ? $("review-list").querySelector(".row.undone button")
+    : rows[Math.min(idx, rows.length - 1)]?.querySelector("input");
+  (target || $("s2").querySelector("h2"))?.focus({ preventScroll: false });
 }
 
 // ------------------------------------------------------------------ mapeamento de colunas
@@ -552,18 +602,24 @@ function updatePlan() {
   $("balance-now").textContent = balanceNow(b); $("balance-scale").textContent = balanceScale(by);
   $("zone-now").textContent = zoneNow(z); $("zone-scale").textContent = ZONE_SCALE;
   const tol = toleranceMin(), kt = kmTolerance();
+  // Com margem de km, igualar "km" quer dizer: km dentro da faixa, e entregas e tempo igualados dentro dela.
+  // O texto do seletor e o da margem dizem a mesma coisa, sem se contradizer.
+  if (by === "km" && kt !== null) $("balance-help").textContent = `Com a margem de km preenchida, o km de cada rota só precisa ficar a ±${Math.round(kt * 100)}% da média; dentro dela, o app iguala entregas e tempo.`;
   $("km-tol-help").textContent = kt === null
-    ? "Vazio: o app tenta deixar os km parecidos entre os entregadores. Com um valor (ex.: 30), entregas e tempo viram o alvo e o km só não pode passar de ±30% da média: o total de km cai, mas os km deixam de ser parecidos."
-    : `Entregas e tempo são o alvo; cada rota pode ter km até ${Math.round(kt * 100)}% acima ou abaixo da média sem penalidade.`;
+    ? "Vazio: o app tenta deixar os km parecidos entre os entregadores. Com um valor (ex.: 30), o km só precisa ficar dentro de ±30% da média e entregas e tempo passam a ser igualados: o total de km cai, mas os km deixam de ser parecidos."
+    : `Cada rota pode ter km até ${Math.round(kt * 100)}% acima ou abaixo da média sem penalidade.`;
   const preset = PRESETS[document.querySelector('input[name="preset"]:checked')?.value];
   const how = preset ? preset.label : `igualar ${BY_LABEL[by]} · ${pct(b)} · zonas ${pct(z)}${kt !== null ? ` · km ±${Math.round(kt * 100)}%` : ""}`;
-  $("adv-summary").textContent = `${how} · folga ${tol} min${state.fromPrefs ? " · da última vez" : ""}`;
+  $("adv-summary").textContent = `${how} · folga ${tol} min${state.fromPrefs && !seasoned() ? " · da última vez" : ""}`;
   const tel = d.filter((x) => x.phone).length;
   $("drivers-count").textContent = d.length ? `${d.length} entregador${d.length > 1 ? "es" : ""}${home ? ` · ${home} ${home > 1 ? "saem" : "sai"} de casa` : ""}${tel ? ` · ${tel} com WhatsApp` : ""}` : "";
   const stops = state.okCount ? `${state.okCount} entregas` : "entregas";
+  const idle = state.okCount && d.length > state.okCount ? d.length - state.okCount : 0;
   $("plan").textContent = !state.okCount ? "Nenhuma entrega localizada ainda: resolva os endereços para revisar."
     : !d.length ? "Informe pelo menos um entregador."
-    : `${stops} para ${d.length} entregador${d.length > 1 ? "es" : ""} · ${preset ? preset.label.toLowerCase() : `igualando ${BY_LABEL[by]} (${pct(b)})`} · ${tol} min de folga por entrega.`;
+    : `${stops} para ${d.length} entregador${d.length > 1 ? "es" : ""} · ${preset ? preset.label.toLowerCase() : `igualando ${BY_LABEL[by]} (${pct(b)})`} · ${tol} min de folga por entrega.`
+      + (idle ? ` Mais entregadores que entregas: ${idle} ficaria${idle > 1 ? "m" : ""} sem rota.` : "");
+  $("plan").classList.toggle("warn", !!idle);
   $("solve").disabled = !d.length || !state.okCount || $("solve").dataset.busy === "1";
   if (!$("solve").classList.contains("armed")) $("solve").textContent = state.result ? "Recalcular rotas" : "Calcular rotas";
 }
@@ -592,7 +648,7 @@ function solveClick() {
   const b = $("solve"), n = state.sent.filter((s) => s.rota || s.links).length;
   if (state.result && n && !b.classList.contains("armed")) {
     b.classList.add("armed");
-    b.textContent = `Recalcular e apagar as marcações de ${n} entregador${n > 1 ? "es" : ""}?`;
+    b.textContent = `Recalcular? Apaga ${n} marcaç${n > 1 ? "ões" : "ão"}`;
     announce(`${b.textContent} As rotas mudam e as marcações de copiado são apagadas. Clique de novo para confirmar, ou Esc para cancelar.`);
     return;
   }
@@ -608,6 +664,9 @@ async function solve() {
   const btn = $("solve"); btn.dataset.busy = "1"; btn.disabled = true; show("s3", false);
   document.body.classList.remove("has-result"); placeGuide();
   const t0 = Date.now(), budget = (state.cfg.solver_seconds || 30) + 15;
+  // O contador muda a cada segundo na tela; o leitor de tela ouve só o início e o fim.
+  ["s2status", "empty-busy"].forEach((id) => $(id).setAttribute("aria-live", "off"));
+  announce(`Calculando as rotas. Costuma levar até ${budget} segundos.`);
   const tick = () => {
     const msg = `Calculando as rotas… ${Math.round((Date.now() - t0) / 1000)} s (costuma levar até ~${budget} s)`;
     setStatus("s2status", msg); const b = $("empty-busy"); b.hidden = false; b.textContent = msg;
@@ -627,8 +686,12 @@ async function solve() {
     } catch {}
     await awaitResult();
     setStatus("s2status", "");
-  } catch (e) { setStatus("s2status", e.message, "err"); }
-  finally { clearInterval(timer); $("empty-busy").hidden = true; btn.dataset.busy = ""; updatePlan(); }
+    announce("Rotas prontas");
+  } catch (e) { $("s2status").removeAttribute("aria-live"); setStatus("s2status", e.message, "err"); announce(e.message); }
+  finally {
+    clearInterval(timer); $("empty-busy").hidden = true; btn.dataset.busy = ""; updatePlan();
+    ["s2status", "empty-busy"].forEach((id) => $(id).removeAttribute("aria-live"));
+  }
 }
 
 // ------------------------------------------------------------------ etapa 3: resultado
@@ -717,17 +780,31 @@ async function copyKind(i, kind) {
     try { await navigator.clipboard.writeText(text); } catch {}
     announce(`${what} de ${who} aberta no WhatsApp`);
   } else if (!(await copyText(text, `${what} de ${who} ${done}`))) return;
+  state.sentOneByOne = true;
   state.sent[i][kind] = true; refreshSent(i); updateSendbar(); saveSent(); showLastCopy(i, kind);
 }
+// "Copiar todas" serve para mandar tudo de uma vez (ex.: num grupo). Marca todos, mas dá para desfazer:
+// se o texto não chegou a ser colado, as marcações voltam como estavam.
 async function copyAll(kind, btn, doneLabel) {
   $("bulk").open = false;
   if (!(await copyText(state.texts.map((t) => t[kind]).join(SEP), doneLabel))) return;
+  const before = state.sent.map((st) => st[kind]);
   state.sent.forEach((st, i) => { st[kind] = true; refreshSent(i); });
   markCopied(btn, doneLabel); updateSendbar(); saveSent();
-  state.lastCopy = null; $("sent-last").textContent = `${doneLabel}: ${KIND[kind][0].toLowerCase()} de todos os entregadores numa mensagem só.`;
+  state.lastCopy = null;
+  $("sent-last").replaceChildren(icon("check"), ` ${doneLabel}: ${KIND[kind][0].toLowerCase()} de todos os entregadores numa mensagem só, e todos marcados. `,
+    el("button", { class: "link", onclick: () => {
+      state.sent.forEach((st, i) => { st[kind] = before[i]; refreshSent(i); });
+      btn.classList.remove("done"); btn.replaceChildren(icon("copy"), " ", btn.id === "copy-all-routes" ? "Copiar todas as rotas" : "Copiar todos os links");
+      updateSendbar(); saveSent();
+      $("sent-last").textContent = "Marcações desfeitas: a fila voltou como estava.";
+      announce($("sent-last").textContent);
+    } }, "Desfazer"));
 }
 
 // ---- impressão: lista completa, sem blocos de 10
+// Sai de casa (endereço ou coordenadas próprias) em vez do ponto padrão?
+const ownStart = (d, r) => !!d.start.address || Math.hypot(d.start.lat - r.depot.lat, d.start.lon - r.depot.lon) > 1e-5;
 function sheetFor(d, r) {
   const today = new Date().toLocaleDateString("pt-BR");
   const bodies = d.stops.map((s) => el("tbody", {}, ...s.deliveries.map((x, k) => el("tr", {},
@@ -738,7 +815,9 @@ function sheetFor(d, r) {
   return el("section", { class: "sheet" },
     el("h1", {}, `Rota — ${d.label}`),
     el("p", { class: "meta" }, `${today} · ${d.count} paradas · ${d.deliveries} entregas · ~${fmtMin(d.total_min)} · ~${Math.round(d.km)} km`),
-    el("p", { class: "meta" }, `Partida e chegada: ${r.depot.address || "ponto padrão"}`),
+    el("p", { class: "meta" }, ownStart(d, r)
+      ? `Partida: ${d.start.address || `${d.start.lat.toFixed(5)}, ${d.start.lon.toFixed(5)}`} · Chegada: ${r.depot.address || "ponto padrão"}`
+      : `Partida e chegada: ${r.depot.address || "ponto padrão"}`),
     el("table", {}, el("thead", {}, el("tr", {}, ...["#", "Nome", "Endereço", "Rastreio", "Chega em", "Entregue"].map((h) => el("th", {}, h)))), ...bodies),
     el("p", { class: "foot" }, "Tempos e km são estimativas. “Chega em” conta desde a saída."));
 }
@@ -752,6 +831,32 @@ function printSheets(list, title) {
   };
   window.addEventListener("afterprint", done);
   window.print();
+}
+
+// Veredito desigual: diz quem destoa no critério mais desigual e oferece o próximo passo, em vez de só alertar.
+function outliers(dr, spreads, kt, usedPreset) {
+  const crit = [["entregas", (d) => d.deliveries, (v) => `${v} entrega${v === 1 ? "" : "s"}`],
+    ["tempo", (d) => d.total_min, fmtMin], ...(kt ? [] : [["km", (d) => d.km, (v) => `${Math.round(v)} km`]])]
+    .sort((a, b) => spreads[b[0]] - spreads[a[0]])[0];
+  const [, val, fmt] = crit;
+  const idx = dr.map((_, i) => i).filter((i) => dr[i].count);
+  const hi = idx.reduce((a, i) => (val(dr[i]) > val(dr[a]) ? i : a), idx[0]);
+  const lo = idx.reduce((a, i) => (val(dr[i]) < val(dr[a]) ? i : a), idx[0]);
+  const who = (i) => el("button", { class: "link", onclick: () => focusRoute(i), "aria-label": `Destacar a rota de ${dr[i].label} no mapa` }, dr[i].label);
+  const p = el("p", { class: "outliers" }, "Mais carregado: ", who(hi), ` (${fmt(val(dr[hi]))}) · mais leve: `, who(lo), ` (${fmt(val(dr[lo]))}).`);
+  if (usedPreset && usedPreset !== "carga") {
+    // com mensagens já enviadas, o botão Calcular pede confirmação: leva a pessoa até ele
+    p.append(" ", el("button", { class: "link", onclick: () => { applyPreset("carga"); state.fromPrefs = false; $("calcbar").scrollIntoView({ behavior: "smooth", block: "nearest" }); solveClick(); } }, "Recalcular com carga parecida"));
+  } else {
+    p.append(" Escolha um nome para ver a rota no mapa.");
+  }
+  return p;
+}
+// Destaca uma rota (como a legenda) e leva o mapa à vista.
+function focusRoute(i) {
+  const b = $("map-legend").querySelectorAll(".lg")[i];
+  if (b && b.getAttribute("aria-pressed") !== "true") b.click();
+  $("s3-map").scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 const range = (a) => (Math.min(...a) === Math.max(...a) ? `${Math.min(...a)}` : `${Math.min(...a)}–${Math.max(...a)}`);
@@ -774,7 +879,8 @@ function renderResult(r) {
   const worst = Math.max(kt ? 0 : spreads.km, spreads.entregas, spreads.tempo);
   // A margem de km só vira alerta quando o operador a escolheu (em "Personalizado"); nas predefinições
   // ela é um ajuste interno do cálculo, e passar dela é informação, não problema.
-  const chosenMargin = (() => { try { return JSON.parse(sessionStorage.getItem(PRESET_KEY))?.[state.job] === "custom"; } catch { return false; } })();
+  const usedPreset = (() => { try { return JSON.parse(sessionStorage.getItem(PRESET_KEY))?.[state.job] || null; } catch { return null; } })();
+  const chosenMargin = usedPreset === "custom";
   const kmOut = kt != null && spreads.km > kmAllowed && chosenMargin;
   // A cor segue o pior critério: nada de verde ao lado de "fora da faixa".
   const verdictWord = worst <= 15 ? "bem equilibradas" : worst <= 30 ? "razoavelmente equilibradas" : "bem desiguais";
@@ -801,6 +907,7 @@ function renderResult(r) {
     ...(n > 1 ? [el("p", { class: `verdict ${verdictKind}` }, verdictKind === "ok" ? icon("check") : icon("alert"), " ",
       `Rotas ${verdictWord}` + (kmOut ? `, mas o km passou da margem de ±${Math.round(kt * 100)}%` : "") +
       `. Diferença entre a menor e a maior: entregas ${spreads.entregas}% · tempo ${spreads.tempo}% · km ${spreads.km}%.`)] : []),
+    ...(n > 1 && worst > 15 ? [outliers(dr, spreads, kt, usedPreset)] : []),
     ...(r.unrouted.length ? [el("p", { class: "alert-line" }, icon("alert"), " ",
       `${r.unrouted.length} entrega${r.unrouted.length > 1 ? "s ficaram" : " ficou"} de fora destas rotas. `, reviewBtn)] : []),
   );
@@ -876,6 +983,7 @@ function updateSendbar() {
   const n = state.sent.length, done = state.sent.filter((s) => s.rota && s.links).length, nx = nextMessage();
   const msgs = state.sent.reduce((a, s) => a + s.rota + s.links, 0);
   $("sent-count").textContent = done === n ? `Rota e links de todos os ${n} entregadores copiados` : `${done} de ${n} entregadores com rota e links copiados`;
+  if (n && done === n && state.sentOneByOne) markSeasoned();   // envio completo de verdade, não o "copiar todas"
   $("sent-meter").style.width = `${n ? (msgs / (2 * n)) * 100 : 0}%`;   // avança a cada mensagem, não só a cada entregador
   const btn = $("copy-next");
   btn.disabled = !nx;
@@ -897,10 +1005,13 @@ async function copyNext() {
   state.lastNextAt = Date.now();
   await copyKind(nx.i, nx.kind);
 }
-// Atalho: tecla C copia a próxima mensagem (fora de campos de texto).
+// Atalho: tecla C copia a próxima mensagem. Só vale com o foco na tela de rotas (ou em nenhum lugar),
+// nunca em campos, links ou botões de outras partes: uma tecla solta não dispara nada por acidente.
 document.addEventListener("keydown", (e) => {
   if (e.key.toLowerCase() !== "c" || e.ctrlKey || e.metaKey || e.altKey || !state.result || $("s3").hidden) return;
-  const t = e.target; if (t.closest && t.closest("input, textarea, select, [contenteditable], dialog")) return;
+  const t = e.target;
+  if (t.closest && t.closest("input, textarea, select, [contenteditable], dialog")) return;
+  if (t !== document.body && !$("s3").contains(t)) return;
   e.preventDefault(); copyNext();
 });
 
@@ -1007,7 +1118,7 @@ function drawMap(r) {
     state.routes.push({ line, dots, layers, pts });
     all.push(...pts);
   });
-  const end = L.marker([r.depot.lat, r.depot.lon]).bindTooltip("Chegada").addTo(state.map);
+  const end = L.marker([r.depot.lat, r.depot.lon], { alt: "Ponto de chegada", title: "Chegada", keyboard: false }).bindTooltip("Chegada").addTo(state.map);
   state.routes.push({ line: null, dots: [], layers: [end] });
   // Enquadra assim que o mapa tiver tamanho real (o painel acabou de aparecer e o layout ainda assenta).
   state.fitPending = all; state.allPts = all;
@@ -1036,7 +1147,7 @@ async function wipe() {
   try { sessionStorage.removeItem(JOB_KEY); } catch {}
   clearSent();
   state.routes.forEach((o) => o.layers.forEach((l) => l.remove())); state.routes = [];
-  resetPanels(); show("wipe", false);
+  resetPanels(); show("wipe", false); setHasJob(false); state.lastDiscard = null;
   setStatus("s1status", "Pronto: lista, nomes, endereços e rotas foram apagados da memória. O elenco salvo neste navegador não foi tocado.", "ok");
   announce("Dados da sessão apagados");
 }
