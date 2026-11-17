@@ -192,7 +192,9 @@ def _ingest(job: jobs.Job, filename: str, data: bytes, mapping: dict | None = No
             }
             job.state, job.message = "mapear", ""
             return
-        job.pending = job.mapping_info = None  # arquivo original sai da memória
+        job.pending = job.mapping_info = None  # arquivo original sai da memória...
+        if any(s.pages for s in stops):        # ...exceto o PDF de intimações, para o PDF de cada entregador
+            job.source_pdf = data
         del data
         job.stops, job.report = stops, report
         job.state, job.message = "geocodificando", "Localizando endereços no mapa"
@@ -439,7 +441,7 @@ def _run_solve(job: jobs.Job, req: SolveIn) -> None:
             "total_min": round(res.total_seconds / 60), "status": res.status,
             "deliveries": len(ok), "visits": len(visits), "extra_delivery_seconds": extra, "tolerance_seconds": tol,
             "zone_purity": round(sum(a * b for a, b in shares) / max(sum(b for _, b in shares), 1), 2),
-            "drivers": drivers_out,
+            "drivers": drivers_out, "has_pages": job.source_pdf is not None,
             "unrouted": [s.public() for s in job.stops if s.status == "revisar"],
         }
         job.state, job.message = "pronto", ""
@@ -463,6 +465,42 @@ def result(job_id: str):
     if job.result is None:
         raise HTTPException(409, "Resultado ainda não disponível.")
     return job.result
+
+
+@app.get("/api/jobs/{job_id}/paginas.pdf")
+def pages_pdf(job_id: str, driver: int | None = None, stop: int | None = None):
+    """Páginas das intimações de um entregador (ou de todos, um após o outro), na ordem da rota; com
+    `stop`, só as de uma entrega (para conferir o original na revisão). Abre no navegador, que já
+    oferece imprimir e salvar."""
+    from pypdf import PdfReader, PdfWriter
+
+    job = _job(job_id)
+    if job.source_pdf is None:
+        raise HTTPException(404, "Esta lista não veio de um PDF de intimações.")
+    if stop is not None:
+        if not 0 <= stop < len(job.stops):
+            raise HTTPException(404, "Entrega não encontrada.")
+        ids = [stop]
+    else:
+        if job.result is None:
+            raise HTTPException(409, "Resultado ainda não disponível.")
+        drivers = [d for d in job.result["drivers"] if driver is None or d["index"] == driver]
+        if not drivers:
+            raise HTTPException(404, "Entregador não encontrado.")
+        ids = [x["id"] for d in drivers for r in d["stops"] for x in r["deliveries"]]
+    reader = PdfReader(io.BytesIO(job.source_pdf))
+    writer = PdfWriter()
+    for i in ids:
+        for p in job.stops[i].pages:
+            writer.add_page(reader.pages[p])
+    if not writer.pages:
+        raise HTTPException(404, "Nenhuma página para este entregador.")
+    buf = io.BytesIO()
+    writer.write(buf)
+    name = (f"intimacao-pagina-{job.stops[stop].pages[0] + 1}" if stop is not None
+            else "intimacoes" if driver is None else f"intimacoes-rota-{driver + 1}")
+    return Response(buf.getvalue(), media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{name}.pdf"'})
 
 
 @app.get("/api/jobs/{job_id}/export.csv")

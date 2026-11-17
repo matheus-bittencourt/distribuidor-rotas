@@ -20,7 +20,7 @@ from typing import Callable
 
 import httpx
 
-from . import templates
+from . import intimacoes, templates
 from .config import RMPA_CITIES, SETTINGS
 from .models import ExtractReport, RawEntry, Stop
 from .sanitize import clean_value, is_sensitive_header, mask_text, norm_header, strip_accents
@@ -90,17 +90,14 @@ def _read_xlsx(data: bytes) -> list[list[list[str]]]:
     return tables
 
 
-def _read_pdf(data: bytes) -> list[str]:
+def _read_pdf_pages(data: bytes) -> list[str]:
     from pypdf import PdfReader
 
-    reader = PdfReader(io.BytesIO(data))
-    lines: list[str] = []
-    for page in reader.pages:
-        for line in (page.extract_text() or "").splitlines():
-            line = line.strip()
-            if line:
-                lines.append(line)
-    return lines
+    return [page.extract_text() or "" for page in PdfReader(io.BytesIO(data)).pages]
+
+
+def _pdf_lines(pages: list[str]) -> list[str]:
+    return [ln.strip() for text in pages for ln in text.splitlines() if ln.strip()]
 
 
 # --------------------------------------------------------------------------- tabelas
@@ -417,7 +414,7 @@ def _to_stops(entries: list[RawEntry], rep: ExtractReport) -> list[Stop]:
             seen.add(e.code)
         display = e.address + (f" ({e.complement})" if e.complement else "")
         s = Stop(id=len(stops), name=e.name or "(sem nome)", address=display,
-                 query=to_query(e.address), code=e.code)
+                 query=to_query(e.query or e.address), code=e.code, pages=list(e.pages))
         city = other_city(e.address)
         if city:
             s.status, s.reason = "revisar", f"fora de Porto Alegre ({city}): entregas só na capital"
@@ -446,9 +443,21 @@ def extract(filename: str, data: bytes, progress: Progress = lambda _m: None,
     elif name.endswith(".xls"):
         raise ValueError("Formato .xls antigo não é suportado: salve como .xlsx ou .csv.")
     elif name.endswith(".pdf"):
-        tables, lines = [], _read_pdf(data)
+        progress("Lendo o PDF")
+        pages = _read_pdf_pages(data)
+        tables, lines = [], _pdf_lines(pages)
         if not lines:
             raise ValueError("O PDF não tem texto selecionável (parece escaneado). OCR ainda não está na POC.")
+        if intimacoes.is_intimacao(pages):  # modelo conhecido: leitura direta, sem IA
+            entries, failed = intimacoes.parse(pages)
+            rep.method, rep.rows_read = "intimação de protesto", len(entries) + failed
+            rep.skipped_lines = failed
+            rep.notes.append("PDF de intimações reconhecido: lidos só nome, endereço e protocolo; CPF/CNPJ e valores foram descartados.")
+            if failed:
+                rep.notes.append(f"{failed} intimação(ões) sem endereço legível ficaram de fora.")
+            if not entries:
+                raise ValueError("Nenhum endereço foi encontrado no arquivo.")
+            return _to_stops(entries, rep), rep
     else:
         raise ValueError("Formato não suportado. Envie .xlsx, .csv ou .pdf.")
 

@@ -146,6 +146,7 @@ details.why > summary::-webkit-details-marker { display: none; }
 /* ---- revisão */
 .review .row { display: grid; grid-template-columns: minmax(8rem, 1fr) 2fr 1.2fr auto; gap: .5rem; align-items: start; padding: .75rem 0; border-top: 1px solid var(--line); }
 .review .who { font-weight: 600; } .review .why { color: var(--warn); font-size: .8125rem; }
+.review .where { color: var(--muted); font-size: .8125rem; font-variant-numeric: tabular-nums; }
 .review .err { grid-column: 1 / -1; color: var(--bad); font-size: .8125rem; }
 .review .btns { display: flex; gap: .4rem; flex-wrap: wrap; }
 @container (max-width: 720px) { .review .row { grid-template-columns: 1fr; } }

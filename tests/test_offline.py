@@ -185,3 +185,41 @@ def test_check_reports_available_with_valid_signature(monkeypatch):
     # assinatura de outra chave: recusa
     routes["manifest.sig"] = base64.b64encode(_keys()[0].sign(man))
     assert updater.check(force=True)["state"] == "error"
+
+
+def _rua(nome, poa=True, lat=-30.05):
+    return {"n": nome, "k": "", "c": "", "poa": poa, "ctr": [lat, -51.2], "pts": [[lat, -51.2]], "a": []}
+
+
+def test_local_geocoder_prefere_porto_alegre_iniciais_extenso_e_nome_parcial(tmp_path):
+    streets = [
+        _rua("Rua Lucas de Oliveira", poa=False, lat=-29.0),        # mesmo nome, outra cidade
+        _rua("Avenida Coronel Lucas de Oliveira", lat=-30.031),
+        _rua("Rua Teresópolis", poa=False, lat=-29.1),
+        _rua("Avenida Teresópolis", lat=-30.032),
+        _rua("Rua 24 de Outubro", lat=-30.033),
+        _rua("Avenida Antônio Jacob Renner", lat=-30.034),
+        _rua("Avenida Engenheiro Francisco Rodolfo Simch", lat=-30.035),
+        _rua("Rua Desembargador Loureiro Lima", lat=-30.036),
+        _rua("Avenida Protásio Alves", lat=-30.037),
+        _rua("Corredor de Transporte Coletivo Protásio Alves", lat=-30.038),
+    ]
+    with gzip.open(tmp_path / "geoindex.json.gz", "wt", encoding="utf-8") as f:
+        json.dump({"streets": streets}, f)       # chaves vazias: o geocodificador refaz ao carregar
+    g = LocalGeocoder(tmp_path)
+    lat = lambda q: g.geocode(q).lat  # noqa: E731
+    assert lat("Rua Lucas de Oliveira, 865, Porto Alegre") == -30.031      # B: a da capital, com outro tipo
+    assert lat("Rua Teresópolis, 2235, Porto Alegre") == -30.032          # B
+    assert lat("Rua Vinte e Quatro de Outubro, 838") == -30.033            # C: por extenso
+    assert lat("A. J. Renner, 2185, Porto Alegre") == -30.034              # F/G: iniciais
+    assert lat("Av Eng Francisco R Simch, 312") == -30.035                 # G: "R" no meio é inicial, não "rua"
+    assert lat("Rua Desembargador Moreno Loureiro Lima") == -30.036        # nome com uma palavra a mais
+    assert lat("Protasio, 12000, Porto Alegre") == -30.037                 # nome com uma palavra a menos
+    assert g.geocode("Rua Inexistente Qualquer, 10") is None
+
+
+def test_numero_por_extenso_so_em_datas():
+    assert full_key("Rua Vinte e Quatro de Outubro") == "rua 24 de outubro"
+    assert full_key("Rua Sete de Setembro") == "rua 7 de setembro"
+    assert full_key("Avenida Dois Irmãos") == "avenida dois irmaos"     # nome, não data
+    assert full_key("R Francisco R Simch") == "rua francisco r simch"

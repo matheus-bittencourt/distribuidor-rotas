@@ -9,7 +9,7 @@ ABBR = {
     "av": "avenida", "avda": "avenida", "r": "rua", "tv": "travessa", "trav": "travessa", "est": "estrada",
     "estr": "estrada", "al": "alameda", "pc": "praca", "pca": "praca", "pr": "praca", "lg": "largo",
     "rod": "rodovia", "vl": "vila", "bc": "beco", "acs": "acesso", "esc": "escadaria", "pq": "parque",
-    "dr": "doutor", "dra": "doutora", "gen": "general", "cel": "coronel", "prof": "professor", "profa": "professora",
+    "dr": "doutor", "dra": "doutora", "gen": "general", "cel": "coronel", "cor": "coronel","prof": "professor", "profa": "professora",
     "des": "desembargador", "eng": "engenheiro", "mal": "marechal", "pres": "presidente", "sen": "senador",
     "dep": "deputado", "ver": "vereador", "cap": "capitao", "ten": "tenente", "maj": "major", "alm": "almirante",
     "brig": "brigadeiro", "pe": "padre", "fr": "frei", "d": "dom", "sto": "santo", "sta": "santa", "s": "sao",
@@ -30,12 +30,42 @@ def strip_accents(s: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
 
 
+_UNITS = {"um": 1, "uma": 1, "dois": 2, "duas": 2, "tres": 3, "quatro": 4, "cinco": 5, "seis": 6, "sete": 7,
+          "oito": 8, "nove": 9}
+_TEENS = {"dez": 10, "onze": 11, "doze": 12, "treze": 13, "quatorze": 14, "catorze": 14, "quinze": 15,
+          "dezesseis": 16, "dezessete": 17, "dezoito": 18, "dezenove": 19}
+_TENS = {"vinte": 20, "trinta": 30, "quarenta": 40, "cinquenta": 50, "sessenta": 60, "setenta": 70,
+         "oitenta": 80, "noventa": 90}
+
+
+def _numbers(ws: list[str]) -> list[str]:
+    """Número por extenso vira algarismo: 'vinte e quatro de outubro' -> '24 de outubro'.
+    Só quando vem antes de 'de' (datas: 'sete de setembro'), para não mexer em nomes como 'Dois Irmãos'."""
+    out, i = [], 0
+    while i < len(ws):
+        w, n, j = ws[i], None, i + 1
+        if w in _TENS:
+            n = _TENS[w]
+            if j + 1 < len(ws) and ws[j] == "e" and ws[j + 1] in _UNITS:
+                n, j = n + _UNITS[ws[j + 1]], j + 2
+        elif w in _TEENS or w in _UNITS:
+            n = _TEENS.get(w) or _UNITS[w]
+        if n is not None and j < len(ws) and ws[j] == "de":
+            out.append(str(n))
+            i = j
+        else:
+            out.append(w)
+            i += 1
+    return out
+
+
 def words(name: str) -> list[str]:
     s = strip_accents(name).lower().replace("º", "").replace("ª", "")
     out = []
-    for w in re.findall(r"[a-z0-9]+", s):
-        out.append(ABBR.get(w, w))
-    return out
+    for i, w in enumerate(re.findall(r"[a-z0-9]+", s)):
+        # "R" só é "rua" no começo; no meio do nome é inicial ("Francisco R. Simch")
+        out.append(w if (w == "r" and i > 0) else ABBR.get(w, w))
+    return _numbers(out)
 
 
 def full_key(name: str) -> str:

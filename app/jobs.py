@@ -26,6 +26,9 @@ class Job:
     stops: list[Stop] = field(default_factory=list)
     report: ExtractReport | None = None
     result: dict | None = None
+    # PDF de intimações: o original fica na memória enquanto o job existe, para montar o PDF de cada
+    # entregador com as páginas das entregas dele. Some junto com o job (DELETE ou fim do prazo).
+    source_pdf: bytes | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 

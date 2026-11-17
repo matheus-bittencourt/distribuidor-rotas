@@ -222,6 +222,7 @@
             <button id="copy-all-routes"><svg class="i"><use href="#i-copy"/></svg> Copiar todas as rotas</button>
             <button id="copy-all-links"><svg class="i"><use href="#i-copy"/></svg> Copiar todos os links</button>
             <button id="print-all"><svg class="i"><use href="#i-print"/></svg> Imprimir todas</button>
+            <a id="pdf-all" href="#" target="_blank" rel="noopener" hidden><svg class="i"><use href="#i-print"/></svg> Intimações de todas as rotas (PDF, nova aba)</a>
             <a id="csv-all" href="#"><svg class="i"><use href="#i-download"/></svg> CSV de todas as rotas</a>
           </div>
         </details>
@@ -232,7 +233,7 @@
       <dl>
         <dt>Faixas e barras</dt><dd>As faixas mostram o menor e o maior valor entre os entregadores. A barra de cada rota compara o critério escolhido com o da rota mais longa. “Zona principal” é a parte da cidade onde o entregador mais atua.</dd>
         <dt>Parada com “2×”</dt><dd>Entregas no mesmo ponto (casa ou condomínio) viram uma parada só: o entregador para uma vez e o tempo parado aumenta um pouco por entrega a mais.</dd>
-        <dt>Copiar e imprimir</dt><dd>“Copiar rota” e “Copiar links” geram duas mensagens separadas, para enviar em sequência no WhatsApp. Em “Mais”, “Imprimir” gera a lista completa do entregador, sem o corte de 10 paradas dos links.</dd>
+        <dt>Copiar e imprimir</dt><dd>“Copiar rota” e “Copiar links” geram duas mensagens separadas, para enviar em sequência no WhatsApp. Em “Mais”, “Imprimir” gera a lista completa do entregador, sem o corte de 10 paradas dos links. Se a lista veio de um PDF de intimações, “Intimações desta rota” abre só as páginas das entregas dele, na ordem da rota, prontas para imprimir ou salvar.</dd>
         <dt>Estimativas</dt><dd>Os tempos incluem o tempo parado e a folga por entrega. Sem mapa de ruas, tempos e km são estimados em linha reta; com ele, seguem as ruas, mas sem trânsito. Servem para comparar entregadores, não como horário prometido. “Aproximada” significa que só a rua foi localizada.</dd>
         <dt>Detalhes deste cálculo</dt><dd id="calc-notes"></dd>
       </dl>

@@ -121,8 +121,8 @@ async function init() {
   $("zone").value = Math.min(fresh ? p.zone ?? state.cfg.zone_weight : state.cfg.zone_weight, state.cfg.zone_weight_max ?? 0.15);
   state.fromPrefs = fresh && (p.by != null || p.balance != null);
   $("s1ai").textContent = state.cfg.llm.startsWith("nenhuma")
-    ? "PDF e texto livre são lidos por regras simples, sem IA: confira os nomes."
-    : `PDF e texto livre são lidos com ${state.cfg.llm}.`;
+    ? "PDF de intimações é lido pelo modelo fixo. Outros PDFs e texto livre são lidos por regras simples, sem IA: confira os nomes."
+    : `PDF de intimações é lido pelo modelo fixo. Outros PDFs e texto livre são lidos com ${state.cfg.llm}.`;
 
   ["balance", "zone", "balance-by"].forEach((id) => $(id).addEventListener("input", () => { state.fromPrefs = false; }));
   ["balance", "zone", "balance-by", "drivers", "depot", "tolerance", "km-tol"].forEach((id) => $(id).addEventListener("input", updatePlan));
@@ -394,8 +394,13 @@ function renderReview(list) {
       try { await api(`/api/jobs/${state.job}/stops/${s.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); if (after) after(); await refresh(); }
       catch (e) { err.textContent = e.message; err.hidden = false; }
     };
+    // Lista vinda do PDF de intimações: em que página está e um atalho para ver o original
+    const pg = s.pages && s.pages.length ? el("div", { class: "where" },
+      `PDF: página ${s.pages[0]}${s.pages.length > 1 ? `–${s.pages[s.pages.length - 1]}` : ""}`,
+      s.code ? ` · ${s.code}` : "", " · ",
+      el("a", { href: `/api/jobs/${state.job}/paginas.pdf?stop=${s.id}`, target: "_blank", rel: "noopener" }, "ver no PDF (nova aba)")) : null;
     box.append(el("div", { class: "row" },
-      el("div", {}, el("div", { class: "who" }, s.name), el("div", { class: "why" }, s.reason)),
+      el("div", {}, el("div", { class: "who" }, s.name), el("div", { class: "why" }, s.reason), ...(pg ? [pg] : [])),
       addr, coords,
       el("div", { class: "btns" },
         el("button", { onclick: () => act({ address: addr.value }) }, "Buscar"),
@@ -804,6 +809,7 @@ function renderResult(r) {
   $("legend").textContent = "Cada cor é uma rota e o número marca a primeira parada dela. Círculo grande = partida; pino azul = chegada. "
     + (byStreet ? "Linhas seguem as ruas." : "Linhas retas, não as ruas.");
   $("csv-all").href = `/api/jobs/${state.job}/export.csv`;
+  $("pdf-all").href = `/api/jobs/${state.job}/paginas.pdf`; $("pdf-all").hidden = !r.has_pages;
   state.texts = dr.map((d) => ({ rota: routeText(d, r.depot.address), links: linksText(d) }));
   state.result = r; state.sig = resultSig(r); state.lastCopy = null; state.phones = phoneByLabel();
   const resumed = loadSent(r);
@@ -834,6 +840,8 @@ function renderResult(r) {
       el("div", { class: "menu" },
         el("button", { onclick: () => { more.open = false; printSheets([d], `Rota ${d.label}`); } }, icon("print"), " Imprimir lista completa"),
         el("a", { href: d.links[0].url, target: "_blank", rel: "noopener", onclick: () => (more.open = false) }, icon("map"), " Abrir trecho 1 no Maps (nova aba)"),
+        ...(r.has_pages ? [el("a", { href: `/api/jobs/${state.job}/paginas.pdf?driver=${d.index}`, target: "_blank", rel: "noopener", onclick: () => (more.open = false) },
+          icon("print"), " Intimações desta rota (PDF, nova aba)")] : []),
         el("a", { href: `/api/jobs/${state.job}/export.csv?driver=${d.index}`, onclick: () => (more.open = false) }, icon("download"), " CSV desta rota")));
     const zoneTxt = d.zones[0] ? `${d.zones[0].name}${d.zones.length > 1 ? ` +${d.zones.length - 1}` : ""}` : "sem paradas";
     const head = el("div", { class: "dhead" },

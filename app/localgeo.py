@@ -21,14 +21,25 @@ NEAR_GAP = 300       # número mais próximo até 300 adiante/atrás: usa ele, c
 FUZZY = 0.86
 
 
+def _initials_match(q: list[str], c: list[str]) -> bool:
+    """Mesmas palavras na mesma ordem, aceitando inicial de uma letra no lugar da palavra ("j" = "jacob")."""
+    if len(q) != len(c) or q == c or not any(len(w) == 1 for w in q + c):
+        return False
+    return all(a == b or (len(a) == 1 and b.startswith(a)) or (len(b) == 1 and a.startswith(b)) for a, b in zip(q, c))
+
+
 class LocalGeocoder:
     def __init__(self, folder: Path):
         with gzip.open(Path(folder) / "geoindex.json.gz", "rt", encoding="utf-8") as f:
             data = json.load(f)
         self.streets = data["streets"]
+        # As chaves são refeitas com as regras atuais de nome (streetnames), para a busca e o índice
+        # usarem sempre a mesma normalização, mesmo com um pacote de mapa gerado antes de uma regra nova.
+        for s in self.streets:
+            s["k"], s["c"] = full_key(s["n"]), core_key(s["n"])
         self.hoods = {}
         for b in data.get("bairros", []):
-            self.hoods[b["k"]] = (b["lat"], b["lon"])
+            self.hoods[full_key(b["n"])] = (b["lat"], b["lon"])
             self.hoods.setdefault(core_key(b["n"]), (b["lat"], b["lon"]))
         self.by_full, self.by_core, self.by_word = defaultdict(list), defaultdict(list), defaultdict(set)
         for i, s in enumerate(self.streets):
@@ -38,20 +49,53 @@ class LocalGeocoder:
                 if len(w) > 2:
                     self.by_word[w[:4]].add(s["c"])   # início da palavra: tolera erro de digitação no fim
 
-    def _candidates(self, street: str) -> tuple[list[int], bool]:
-        """(índices de ruas, nome exato?)."""
-        hit = self.by_full.get(full_key(street))
+    def _candidates(self, street: str, wide: bool = False) -> tuple[list[int], bool]:
+        """(índices de ruas, nome exato?). Cada etapa só vale se achar rua em Porto Alegre (ou em
+        qualquer cidade, com `wide`): uma "Rua Lucas de Oliveira" de outra cidade não pode esconder a
+        "Avenida Coronel Lucas de Oliveira" da capital, que a etapa do miolo do nome encontra."""
+        def keep(ids):
+            return [i for i in ids if wide or self.streets[i]["poa"]]
+
+        hit = keep(self.by_full.get(full_key(street), []))
         if hit:
             return hit, True
         core = core_key(street)
-        hit = self.by_core.get(core)
-        if hit:
+        if not core:
+            return [], False
+        hit = keep(self.by_core.get(core, []))
+        if hit:  # mesmo miolo: prefere o mesmo tipo, mas aceita "Rua" no lugar de "Avenida"
             t = street_type(street)
             same = [i for i in hit if not t or street_type(self.streets[i]["n"]) == t]
             return same or hit, True
-        pool = set().union(*(self.by_word.get(w[:4], set()) for w in core.split() if len(w) > 2)) if core else set()
+        qw = core.split()
+        pool = set().union(*(self.by_word.get(w[:4], set()) for w in qw if len(w) > 2))
+        # iniciais: "A J Renner" = "Antônio Jacob Renner", "Francisco R Simch" = "Francisco Rodolfo Simch"
+        hit = keep(i for c in sorted(pool) if _initials_match(qw, c.split()) for i in self.by_core[c])
+        if hit:
+            return hit, False
         near = difflib.get_close_matches(core, list(pool), n=3, cutoff=FUZZY)
-        return [i for c in near for i in self.by_core[c]], False
+        hit = keep(i for c in near for i in self.by_core[c])
+        if hit:
+            return hit, False
+        return self._partial(qw, pool, keep), False
+
+    def _partial(self, qw: list[str], pool: set[str], keep) -> list[int]:
+        """Nome com uma palavra a mais ou a menos ("Moreno Loureiro Lima" = "Loureiro Lima";
+        "Protásio" = "Protásio Alves"). Só aceita se um único nome sobra como o mais parecido."""
+        q = set(qw)
+        found: dict[str, int] = {}
+        for c in pool:
+            cw = set(c.split())
+            small = q if len(q) <= len(cw) else cw
+            if small < (cw if small is q else q) and (len(small) >= 2 or len(next(iter(small))) >= 6):
+                ids = keep(self.by_core[c])
+                if ids:
+                    found[c] = len(q ^ cw)
+        if not found:
+            return []
+        best = min(found.values())
+        names = [c for c, d in found.items() if d == best]
+        return keep(self.by_core[names[0]]) if len(names) == 1 else []
 
     @staticmethod
     def _locate(s: dict, num: int | None) -> tuple[float, float, str]:
@@ -75,10 +119,10 @@ class LocalGeocoder:
         street, num = parse_query(query)
         if not street:
             return None
-        idx, exact_name = self._candidates(street)
+        idx, exact_name = self._candidates(street, wide)
         sp = split_number(street) if num is None else None
         if sp and not exact_name:          # "Rua X 123": só separa o número se "Rua X 123" não é nome de rua
-            idx2, exact2 = self._candidates(sp[0])
+            idx2, exact2 = self._candidates(sp[0], wide)
             if idx2 and (exact2 or not idx):
                 (street, num), idx = sp, idx2
         cands = [self.streets[i] for i in idx]

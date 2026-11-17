@@ -16,12 +16,14 @@ class Stop:
     precision: str = ""     # exato | aproximado | manual
     reason: str = ""        # motivo quando status == revisar
     zone: str = ""
+    pages: list[int] = field(default_factory=list)  # páginas desta entrega no PDF original (intimações)
 
     def public(self) -> dict:
         return {
             "id": self.id, "name": self.name, "address": self.address, "code": self.code,
             "status": self.status, "lat": self.lat, "lon": self.lon,
             "precision": self.precision, "reason": self.reason, "zone": self.zone,
+            "pages": [p + 1 for p in self.pages],  # numeração do PDF original, começando em 1
         }
 
 
@@ -31,6 +33,8 @@ class RawEntry:
     address: str
     complement: str = ""   # apto/bloco: só para exibição, não vai ao geocodificador
     code: str = ""
+    pages: list[int] = field(default_factory=list)
+    query: str = ""        # consulta para o mapa, quando difere do endereço (via interna de condomínio)
 
 
 @dataclass
