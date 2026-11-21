@@ -21,6 +21,16 @@ def test_zone_membership():
     assert not got[4:].any(), got
 
 
+def test_border_streets_stay_inside_with_the_edge_band():
+    poly = pedestrian.polygon()
+    north = poly[np.argmax(poly[:, 0])]                    # vértice mais ao norte
+    near = np.array([[north[0] + 40 / 111320, north[1]]])  # 40 m para fora
+    far = np.array([[north[0] + 300 / 111320, north[1]]])  # 300 m para fora
+    assert pedestrian.inside(near)[0] and not pedestrian.inside(far)[0]
+    assert not pedestrian.inside(near, edge_m=0)[0]        # sem a faixa, só vale o polígono
+    assert pedestrian.inside(near, edge_m=0).sum() == 0
+
+
 def test_default_start_is_inside_the_zone():
     lat, lon, _ = pedestrian.default_start()
     assert pedestrian.inside(np.array([[lat, lon]]))[0]

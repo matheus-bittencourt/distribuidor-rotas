@@ -64,6 +64,9 @@ class Settings:
     osrm_foot_url: str = os.environ.get("OSRM_FOOT_URL", "http://localhost:5001")   # OSRM com o perfil de pedestre
     walk_speed_kmh: float = _f("WALK_SPEED_KMH", 4.5)             # só na estimativa (sem OSRM de pedestre)
     walk_detour_factor: float = _f("WALK_DETOUR_FACTOR", 1.25)
+    # Rua que limita a zona fica DENTRO: o ponto até esta distância (m) do contorno também conta como da zona.
+    # O contorno tem erro de ~40 m (máx. ~75 m) por vir de um print; 80 m cobre isso sem passar de um quarteirão.
+    pedestrian_edge_m: float = _f("PEDESTRIAN_EDGE_M", 80.0)
     pedestrian_max_hours: float = _f("PEDESTRIAN_MAX_HOURS", 8.0)  # acima disso o app avisa que a rota a pé é longa
     # Estimativa usada quando não há OSRM
     avg_speed_kmh: float = _f("AVG_SPEED_KMH", 28.0)

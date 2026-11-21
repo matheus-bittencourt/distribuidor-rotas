@@ -12,6 +12,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .config import SETTINGS
+
 ZONE_FILE = Path(__file__).with_name("pedestrian_zone.json")
 LABEL = "A pé (Centro)"
 
@@ -30,8 +32,10 @@ def default_start() -> tuple[float, float, str]:
     return s["lat"], s["lon"], s.get("address", "")
 
 
-def inside(latlon: np.ndarray) -> np.ndarray:
-    """Quais pontos (lat, lon) estão dentro do polígono (traçado de raio; ponto na borda conta como dentro)."""
+def inside(latlon: np.ndarray, edge_m: float | None = None) -> np.ndarray:
+    """Quais pontos (lat, lon) são da zona: dentro do polígono (traçado de raio) OU a até `edge_m` metros do
+    contorno (padrão: PEDESTRIAN_EDGE_M). A faixa mantém as ruas de borda dentro da zona."""
+    edge_m = SETTINGS.pedestrian_edge_m if edge_m is None else edge_m
     pts = np.asarray(latlon, dtype=float).reshape(-1, 2)
     poly = polygon()
     lat, lon = pts[:, 0], pts[:, 1]
@@ -44,10 +48,11 @@ def inside(latlon: np.ndarray) -> np.ndarray:
         with np.errstate(divide="ignore", invalid="ignore"):
             x_at = x1 + (lat - y1) * (x2 - x1) / (y2 - y1)
         res ^= crosses & (lon < x_at)
-        # ~1 m de tolerância: entrega na própria rua que limita a zona fica dentro
-        dx, dy = x2 - x1, y2 - y1
+        # distância (m) do ponto ao segmento, com a longitude encolhida pelo cosseno da latitude
+        kx, ky = 111320.0 * np.cos(np.radians(lat)), 111320.0
+        ax, ay = (x1 - lon) * kx, (y1 - lat) * ky
+        dx, dy = (x2 - x1) * kx, (y2 - y1) * ky
         seg2 = dx * dx + dy * dy
-        t = np.clip(((lon - x1) * dx + (lat - y1) * dy) / seg2, 0, 1) if seg2 else np.zeros(len(pts))
-        d2 = (lon - (x1 + t * dx)) ** 2 + (lat - (y1 + t * dy)) ** 2
-        on_edge |= d2 < (1e-5) ** 2
+        t = np.clip(-(ax * dx + ay * dy) / seg2, 0, 1) if np.all(seg2 > 0) else np.zeros(len(pts))
+        on_edge |= np.hypot(ax + t * dx, ay + t * dy) <= max(edge_m, 1.0)
     return res | on_edge
