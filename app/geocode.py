@@ -161,11 +161,13 @@ def make_geocoder():
         raise RuntimeError("Modo isolado: geocodificação pela internet desligada. Use GEOCODER=local.")
     if name == "cache":
         return Cache()
-    if name == "google":
-        return Google()
     if name == "fake":
         return Fake()
-    return Nominatim()
+    inner = Google() if name == "google" else Nominatim()
+    if SETTINGS.viacep and not SETTINGS.offline:
+        from .viacep import Enriched
+        return Enriched(inner)
+    return inner
 
 
 def geocode_stops(stops: list[Stop], progress: Callable[[int, int], None] = lambda a, b: None,

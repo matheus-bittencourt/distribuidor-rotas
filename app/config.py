@@ -49,6 +49,11 @@ class Settings:
     nominatim_rate: float = _f("NOMINATIM_RATE", 1.0)  # requisições/s (1 = política do servidor público)
     nominatim_user_agent: str = os.environ.get("NOMINATIM_USER_AGENT", "distribuidor-rotas-poc")
     google_api_key: str = os.environ.get("GOOGLE_MAPS_API_KEY", "")
+    # ViaCEP (opcional): acrescenta o bairro à consulta. Só sai da máquina o nome da rua.
+    viacep: bool = os.environ.get("VIACEP", "0") == "1"
+    viacep_url: str = os.environ.get("VIACEP_URL", "https://viacep.com.br")
+    viacep_rate: float = _f("VIACEP_RATE", 2.0)         # requisições/s (a API bloqueia uso massivo)
+    viacep_cache: str = os.environ.get("VIACEP_CACHE", "data/viacep.json")
     # Matriz de tempos: local (pacote de mapa, sem rede) | osrm | haversine
     matrix: str = os.environ.get("MATRIX", "haversine")
     osrm_url: str = os.environ.get("OSRM_URL", "http://localhost:5000")
