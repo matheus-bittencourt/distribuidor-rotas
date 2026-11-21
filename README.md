@@ -134,7 +134,8 @@ zona vai para ele; as demais seguem para as motos, como antes.
 - **Zona:** o contorno do print de referência, em `app/pedestrian_zone.json` (polígono em latitude/longitude).
   Foi georreferenciado por 9 pontos do mapa (Mercado Público, Praça da Alfândega etc.): erro médio de ~40 m e
   máximo de ~75 m, então **uma entrega na rua que limita a zona pode cair de um lado ou do outro**. Para ajustar,
-  edite os vértices do arquivo. Entrega exatamente sobre a borda conta como dentro.
+  edite os vértices do arquivo. **Ruas que limitam a zona ficam dentro:** além do que está dentro do contorno, entra toda
+  entrega a até `PEDESTRIAN_EDGE_M` (80 m) dele, o que cobre o erro da georreferência (mais que isso já pega o quarteirão vizinho).
 - **Rota:** a pé, saindo e voltando ao mesmo ponto dentro da zona (padrão: Praça da Alfândega, editável na tela).
   Os links do Maps saem em modo "a pé". A rota soma aos entregadores informados (14 motos viram 15 rotas) e fica
   **fora do equilíbrio** de km, entregas e tempo: o veredito e as faixas comparam só as motos. O app avisa se a
@@ -159,6 +160,7 @@ Medido com os 1400 endereços de teste e 14 entregadores: 32 entregas em 22 para
 | `MATRIX` / `OSRM_URL` | `haversine` / `http://localhost:5000` | `osrm` calcula tempos e km reais por ruas. |
 | `OSRM_BLOCK` / `OSRM_WORKERS` | 100 / 8 | Pontos de origem e de destino por requisição (o servidor aceita até 200 no total) e requisições simultâneas. |
 | `PEDESTRIAN` / `OSRM_FOOT_URL` | 1 / `http://localhost:5001` | Liga o entregador a pé do Centro e aponta para o OSRM de pedestre. |
+| `PEDESTRIAN_EDGE_M` | 80 | Faixa (m) ao redor do contorno da zona a pé: entrega nela conta como da zona. 0 = só o que está dentro. |
 | `WALK_SPEED_KMH` / `WALK_DETOUR_FACTOR` / `PEDESTRIAN_MAX_HOURS` | 4,5 / 1,25 / 8 | Estimativa a pé (sem OSRM de pedestre) e limite do aviso de rota longa. |
 | `KM_TOLERANCE` | 0,15 | Faixa de km em torno da média (±15%); 0 = tentar igualar os km. Editável na tela. |
 | `ZONE_WEIGHT` | 0,10 | Peso das zonas, de 0 a 0,15 (teto fixo: valores maiores são cortados em 0,15). |
