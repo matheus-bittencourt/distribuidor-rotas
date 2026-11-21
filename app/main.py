@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import jobs, templates, zones
+from . import jobs, pedestrian, templates, zones
 from .config import FALLBACK_DEPOT, RMPA_CITIES, SETTINGS
 from .extract import COLUMN_LABELS, NeedMapping, extract, llm_provider, to_query
 from .geocode import geocode_stops, in_metro, in_region, make_geocoder
@@ -26,7 +26,7 @@ from .links import build_links
 from starlette.formparsers import MultiPartParser
 
 from . import mapdata, netguard, updater
-from .matrix import build_matrix, osrm_paths
+from .matrix import build_matrix, build_walk_matrix, osrm_paths
 from .sanitize import is_sensitive_header, strip_accents
 from .solver import solve
 
@@ -76,6 +76,11 @@ class DriverIn(BaseModel):
     start: PointIn = PointIn()   # vazio = sai do ponto padrão
 
 
+class PedestrianIn(BaseModel):
+    enabled: bool = True              # entregas da zona do Centro vão todas para um entregador a pé
+    start: PointIn = PointIn()        # vazio = ponto padrão dentro da zona (Praça da Alfândega)
+
+
 class SolveIn(BaseModel):
     depot: PointIn
     drivers: list[DriverIn] = Field(min_length=1, max_length=40)
@@ -87,6 +92,7 @@ class SolveIn(BaseModel):
     time_limit: int | None = Field(None, ge=5, le=300)
     service_seconds: int | None = Field(None, ge=0, le=1800)
     tolerance_seconds: int | None = Field(None, ge=0, le=1800)   # folga por entrega (padrão: 5 min)
+    pedestrian: PedestrianIn = PedestrianIn()
 
 
 class StopPatch(BaseModel):
@@ -116,6 +122,7 @@ def config():
     return {
         "default_depot": SETTINGS.default_depot,
         "geocoder": SETTINGS.geocoder,
+        "pedestrian": SETTINGS.pedestrian,
         "matrix": SETTINGS.matrix,
         "llm": {"ollama": "IA local (Ollama)", "anthropic": "API Anthropic"}.get(prov, "nenhuma (heurística)"),
         "service_seconds": SETTINGS.service_seconds,
@@ -369,10 +376,14 @@ def _run_solve(job: jobs.Job, req: SolveIn) -> None:
             for s in v:
                 s.zone = zone_names[z]
 
-        method = {"v": ""}
+        method = {"v": "", "w": ""}
 
         def matrix_fn(coords):
             t, d, method["v"] = build_matrix(coords)
+            return t, d
+
+        def walk_matrix_fn(coords):
+            t, d, method["w"] = build_walk_matrix(coords)
             return t, d
 
         service = SETTINGS.service_seconds if req.service_seconds is None else req.service_seconds
@@ -381,21 +392,43 @@ def _run_solve(job: jobs.Job, req: SolveIn) -> None:
         tol = SETTINGS.delivery_tolerance_seconds if req.tolerance_seconds is None else req.tolerance_seconds
         # tempo parado = base da parada + extra por entrega adicional + tolerância de CADA entrega
         visit_service = np.array([service + extra * (len(v) - 1) + tol * len(v) for v in visits], dtype=np.int64)
+        time_limit = req.time_limit or SETTINGS.solver_seconds
+
+        # Entregador a pé: toda entrega dentro da zona do Centro vai para ele; o resto, para as motos.
+        ped_on = SETTINGS.pedestrian and req.pedestrian.enabled
+        in_zone = pedestrian.inside(stop_xy) if ped_on else np.zeros(len(visits), dtype=bool)
+        walk_idx, rest_idx = np.flatnonzero(in_zone), np.flatnonzero(~in_zone)
+        walk_start, walk_addr = None, ""
+        if walk_idx.size:
+            ps = req.pedestrian.start
+            if ps.address or ps.lat is not None:
+                walk_start, walk_addr = _resolve(ps, geocoder), ps.address or ""
+                if walk_start is None:
+                    raise ValueError("Não foi possível localizar o ponto de saída do entregador a pé.")
+            else:
+                dlat, dlon, walk_addr = pedestrian.default_start()
+                walk_start = (dlat, dlon)
+
         res = solve(
-            stop_xy, np.array(starts), np.array(depot), matrix_fn,
-            service_seconds=service, balance=req.balance,
-            time_limit=req.time_limit or SETTINGS.solver_seconds,
-            zone_idx=zone_idx, zone_centers=zone_centers, zone_weight=zw, balance_by=req.balance_by,
-            stop_service=visit_service, stop_deliveries=np.array([len(v) for v in visits]),
+            stop_xy[rest_idx].reshape(-1, 2), np.array(starts), np.array(depot), matrix_fn,
+            service_seconds=service, balance=req.balance, time_limit=time_limit,
+            zone_idx=zone_idx[rest_idx], zone_centers=zone_centers, zone_weight=zw, balance_by=req.balance_by,
+            stop_service=visit_service[rest_idx], stop_deliveries=np.array([len(visits[j]) for j in rest_idx]),
             km_tolerance=req.km_tolerance,
         )
+        wres = None
+        if walk_idx.size:   # uma só rota, de pedestre, que sai e volta ao ponto dele; sem equilibrar com as motos
+            wres = solve(
+                stop_xy[walk_idx], np.array([walk_start]), np.array(walk_start), walk_matrix_fn,
+                service_seconds=service, balance=0.0, time_limit=min(time_limit, 15),
+                stop_service=visit_service[walk_idx], stop_deliveries=np.array([len(visits[j]) for j in walk_idx]),
+            )
+        if not method["v"]:
+            method["v"] = method["w"] or "estimativa"
 
-        drivers_out = []
-        for i, d in enumerate(req.drivers):
-            idxs = res.routes[i]
+        def make_driver(i, label, start, start_addr, idxs, legs, meters, end, end_addr, mode):
             seq = [visits[j] for j in idxs]
             svc = [int(visit_service[j]) for j in idxs]
-            legs, meters = res.leg_seconds[i], res.leg_meters[i]
             t, rows = 0, []
             for order, (v, leg, leg_m, sv) in enumerate(zip(seq, legs, meters, svc), start=1):
                 t += leg
@@ -410,9 +443,10 @@ def _run_solve(job: jobs.Job, req: SolveIn) -> None:
                 t += sv
             travel = sum(legs)
             zc = Counter(v[0].zone for v in seq).most_common()
-            drivers_out.append({
-                "index": i, "label": d.label or f"Entregador {i + 1}",
-                "start": {"lat": starts[i][0], "lon": starts[i][1], "address": d.start.address or ""},
+            return {
+                "index": i, "label": label, "mode": mode,
+                "start": {"lat": start[0], "lon": start[1], "address": start_addr},
+                "end": {"lat": end[0], "lon": end[1], "address": end_addr},
                 "count": len(seq), "deliveries": sum(len(v) for v in seq), "stops": rows,
                 "travel_min": round(travel / 60), "total_min": round((travel + sum(svc)) / 60),
                 "last_leg_min": round(legs[-1] / 60, 1) if legs else 0,
@@ -420,28 +454,58 @@ def _run_solve(job: jobs.Job, req: SolveIn) -> None:
                 "zones": [{"name": n, "count": c} for n, c in zc],
                 "main_zone_share": round(zc[0][1] / len(seq), 2) if seq else 0,
                 # sem origem no 1º link: o Maps parte da localização atual de quem abre o link
-                "links": build_links([(v[0].lat, v[0].lon) for v in seq], depot,
-                                     per_link=SETTINGS.maps_waypoints_per_link),
-            })
+                "links": build_links([(v[0].lat, v[0].lon) for v in seq], end,
+                                     per_link=SETTINGS.maps_waypoints_per_link,
+                                     mode="walking" if mode == "pe" else "driving"),
+            }
+
+        drivers_out = []
+        for i, d in enumerate(req.drivers):
+            idxs = [int(rest_idx[j]) for j in res.routes[i]]
+            drivers_out.append(make_driver(
+                i, d.label or f"Entregador {i + 1}", starts[i], d.start.address or "", idxs,
+                res.leg_seconds[i], res.leg_meters[i], depot, req.depot.address or "", "moto"))
+        walker = None
+        if wres is not None:
+            idxs = [int(walk_idx[j]) for j in wres.routes[0]]
+            walker = make_driver(len(req.drivers), pedestrian.LABEL, walk_start, walk_addr, idxs,
+                                 wres.leg_seconds[0], wres.leg_meters[0], walk_start, walk_addr, "pe")
+
         # Trajeto por ruas para o mapa (OSRM ou malha offline; na estimativa, linhas retas entre as paradas).
-        if method["v"] in ("osrm", "ruas"):
+        def route_pts(d):
+            return ([(d["start"]["lat"], d["start"]["lon"]), *((s["lat"], s["lon"]) for s in d["stops"]),
+                     (d["end"]["lat"], d["end"]["lon"])] if d["stops"] else [])
+
+        for d in drivers_out + ([walker] if walker else []):
+            d["path"] = None
+        if method["v"] in ("osrm", "ruas") and rest_idx.size:
             job.message = "Traçando o trajeto por ruas"
-            pts = [[(d["start"]["lat"], d["start"]["lon"]), *((s["lat"], s["lon"]) for s in d["stops"]), depot]
-                   if d["stops"] else [] for d in drivers_out]
+            pts = [route_pts(d) for d in drivers_out]
             try:
                 paths = osrm_paths(pts) if method["v"] == "osrm" else mapdata.router().paths(pts)
             except Exception:
                 paths = [None] * len(pts)
             for d, p in zip(drivers_out, paths):
                 d["path"] = p
+        if walker and method["w"] == "osrm":
+            walker["path"] = osrm_paths([route_pts(walker)], base_url=SETTINGS.osrm_foot_url, profile="walking")[0]
+
         shares = [(d["main_zone_share"], d["count"]) for d in drivers_out if d["count"]]
+        pedestrian_out = {"enabled": bool(ped_on), "active": walker is not None,
+                          "polygon": pedestrian.polygon().tolist() if ped_on else [],
+                          "matrix": method["w"], "warning": ""}
+        if walker and walker["total_min"] > SETTINGS.pedestrian_max_hours * 60:
+            pedestrian_out["warning"] = (
+                f"A rota a pé tem {walker['deliveries']} entregas e leva cerca de {round(walker['total_min'] / 60, 1)} h, "
+                f"acima de {SETTINGS.pedestrian_max_hours:g} h. Considere dividir a zona do Centro com outro entregador.")
         job.result = {
             "depot": {"lat": depot[0], "lon": depot[1], "address": req.depot.address or ""},
             "balance": req.balance, "balance_by": req.balance_by, "km_tolerance": req.km_tolerance, "zone_weight": zw, "matrix": method["v"], "service_seconds": service,
-            "total_min": round(res.total_seconds / 60), "status": res.status,
+            "total_min": round((res.total_seconds + (wres.total_seconds if wres else 0)) / 60), "status": res.status,
             "deliveries": len(ok), "visits": len(visits), "extra_delivery_seconds": extra, "tolerance_seconds": tol,
             "zone_purity": round(sum(a * b for a, b in shares) / max(sum(b for _, b in shares), 1), 2),
-            "drivers": drivers_out, "has_pages": job.source_pdf is not None,
+            "drivers": drivers_out + ([walker] if walker else []), "pedestrian": pedestrian_out,
+            "has_pages": job.source_pdf is not None,
             "unrouted": [s.public() for s in job.stops if s.status == "revisar"],
         }
         job.state, job.message = "pronto", ""

@@ -49,11 +49,22 @@ class Settings:
     nominatim_rate: float = _f("NOMINATIM_RATE", 1.0)  # requisições/s (1 = política do servidor público)
     nominatim_user_agent: str = os.environ.get("NOMINATIM_USER_AGENT", "distribuidor-rotas-poc")
     google_api_key: str = os.environ.get("GOOGLE_MAPS_API_KEY", "")
+    # ViaCEP (opcional): acrescenta o bairro à consulta. Só sai da máquina o nome da rua.
+    viacep: bool = os.environ.get("VIACEP", "0") == "1"
+    viacep_url: str = os.environ.get("VIACEP_URL", "https://viacep.com.br")
+    viacep_rate: float = _f("VIACEP_RATE", 2.0)         # requisições/s (a API bloqueia uso massivo)
+    viacep_cache: str = os.environ.get("VIACEP_CACHE", "data/viacep.json")
     # Matriz de tempos: local (pacote de mapa, sem rede) | osrm | haversine
     matrix: str = os.environ.get("MATRIX", "haversine")
     osrm_url: str = os.environ.get("OSRM_URL", "http://localhost:5000")
     osrm_block: int = _i("OSRM_BLOCK", 100)     # pontos de origem e de destino por requisição (limite do servidor: 200 no total)
     osrm_workers: int = _i("OSRM_WORKERS", 8)
+    # Entregador a pé: as entregas dentro da zona do Centro (app/pedestrian_zone.json) vão todas para ele
+    pedestrian: bool = os.environ.get("PEDESTRIAN", "1") == "1"
+    osrm_foot_url: str = os.environ.get("OSRM_FOOT_URL", "http://localhost:5001")   # OSRM com o perfil de pedestre
+    walk_speed_kmh: float = _f("WALK_SPEED_KMH", 4.5)             # só na estimativa (sem OSRM de pedestre)
+    walk_detour_factor: float = _f("WALK_DETOUR_FACTOR", 1.25)
+    pedestrian_max_hours: float = _f("PEDESTRIAN_MAX_HOURS", 8.0)  # acima disso o app avisa que a rota a pé é longa
     # Estimativa usada quando não há OSRM
     avg_speed_kmh: float = _f("AVG_SPEED_KMH", 28.0)
     detour_factor: float = _f("DETOUR_FACTOR", 1.35)

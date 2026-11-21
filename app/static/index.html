@@ -135,6 +135,13 @@
       <input id="depot" type="text" autocomplete="off">
     </label>
 
+    <div class="field" id="ped-field">
+      <label class="check"><input type="checkbox" id="ped-on" checked> Um entregador a pé no Centro</label>
+      <span class="hint">Todas as entregas dentro da zona do Centro Histórico (o contorno aparece no mapa depois de calcular) vão para ele. Ele sai e volta ao mesmo ponto, com rota de pedestre, soma aos entregadores abaixo e fica fora do equilíbrio de carga. As demais rotas são de moto.</span>
+      <label class="sub" for="ped-start">Ponto de saída e chegada dele (opcional)</label>
+      <input id="ped-start" type="text" autocomplete="off" placeholder="Padrão: Praça da Alfândega">
+    </div>
+
     <label class="field" for="drivers">Entregadores, um por linha
       <span class="hint first-use">Só o nome: sai do ponto padrão. <code>Nome; endereço ou lat, lon</code>: sai de casa. Todos chegam ao ponto de chegada. Com telefone (<code>Nome; 51 99999-0000</code>), o app abre a conversa do WhatsApp já com a mensagem; o telefone fica só neste navegador.</span>
       <span class="hint seasoned-only">Formato: <code>Nome; endereço ou lat, lon; telefone</code>, cada parte opcional.</span>

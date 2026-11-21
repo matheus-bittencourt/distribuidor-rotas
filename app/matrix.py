@@ -28,12 +28,16 @@ def estimated_dist_m(coords: np.ndarray) -> np.ndarray:
     return np.rint(haversine_km(coords, coords) * SETTINGS.detour_factor * 1000).astype(np.int64)
 
 
-def osrm_matrix(coords: np.ndarray, base_url: str | None = None, block: int | None = None) -> tuple[np.ndarray, np.ndarray]:
-    """Tempos (s) e distâncias (m) reais por ruas via OSRM (/table), em blocos para respeitar --max-table-size."""
+def osrm_matrix(coords: np.ndarray, base_url: str | None = None, block: int | None = None, profile: str = "driving",
+                fallback: tuple[np.ndarray, np.ndarray] | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """Tempos (s) e distâncias (m) reais por ruas via OSRM (/table), em blocos para respeitar --max-table-size.
+    `profile` é só o rótulo na URL (o servidor usa o perfil com que foi preparado); `fallback` = estimativa
+    (tempos, distâncias) que fica nos pares sem rota."""
     base_url = (base_url or SETTINGS.osrm_url).rstrip("/")
     block = block or SETTINGS.osrm_block
     n = len(coords)
-    dur, dist = estimated_matrix(coords).copy(), estimated_dist_m(coords).copy()
+    dur, dist = (fallback[0].copy(), fallback[1].copy()) if fallback else (estimated_matrix(coords).copy(), estimated_dist_m(coords).copy())
+
     def one(client, src, dst):
         src_set = set(src)
         idx = src + [j for j in dst if j not in src_set]
@@ -44,7 +48,7 @@ def osrm_matrix(coords: np.ndarray, base_url: str | None = None, block: int | No
             "destinations": ";".join(str(pos[k]) for k in dst),
             "annotations": "duration,distance",
         }
-        r = client.get(f"{base_url}/table/v1/driving/{path}", params=params)
+        r = client.get(f"{base_url}/table/v1/{profile}/{path}", params=params)
         r.raise_for_status()
         return src, dst, r.json()
 
@@ -62,7 +66,7 @@ def osrm_matrix(coords: np.ndarray, base_url: str | None = None, block: int | No
     return dur, dist
 
 
-def osrm_paths(routes: list[list[tuple[float, float]]], base_url: str | None = None) -> list[str | None]:
+def osrm_paths(routes: list[list[tuple[float, float]]], base_url: str | None = None, profile: str = "driving") -> list[str | None]:
     """Trajeto por ruas de cada rota (lista de pontos lat/lon em ordem), como polyline codificada
     (precisão 5, formato do Google). None quando a rota não pôde ser traçada: o mapa usa linhas retas."""
     base_url = (base_url or SETTINGS.osrm_url).rstrip("/")
@@ -72,7 +76,7 @@ def osrm_paths(routes: list[list[tuple[float, float]]], base_url: str | None = N
             return None
         try:
             path = ";".join(f"{lon:.6f},{lat:.6f}" for lat, lon in pts)
-            r = client.get(f"{base_url}/route/v1/driving/{path}",
+            r = client.get(f"{base_url}/route/v1/{profile}/{path}",
                            params={"overview": "full", "geometries": "polyline", "continue_straight": "false"})
             r.raise_for_status()
             body = r.json()
@@ -82,6 +86,24 @@ def osrm_paths(routes: list[list[tuple[float, float]]], base_url: str | None = N
 
     with httpx.Client(timeout=60) as client, ThreadPoolExecutor(max_workers=SETTINGS.osrm_workers) as pool:
         return list(pool.map(lambda p: one(client, p), routes))
+
+
+def walk_estimate(coords: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """A pé, sem rede: linha reta x fator de desvio / velocidade de caminhada."""
+    km = haversine_km(coords, coords) * SETTINGS.walk_detour_factor
+    return np.rint(km / SETTINGS.walk_speed_kmh * 3600).astype(np.int64), np.rint(km * 1000).astype(np.int64)
+
+
+def build_walk_matrix(coords: np.ndarray) -> tuple[np.ndarray, np.ndarray, str]:
+    """(tempos em s, distâncias em m, origem) para o entregador a pé: OSRM com perfil de pedestre, se houver."""
+    est = walk_estimate(coords)
+    if SETTINGS.matrix == "osrm":
+        try:
+            t, d = osrm_matrix(coords, base_url=SETTINGS.osrm_foot_url, profile="walking", fallback=est)
+            return t, d, "osrm"
+        except Exception:
+            return est[0], est[1], "estimativa (OSRM de pedestre indisponível)"
+    return est[0], est[1], "estimativa"
 
 
 def build_matrix(coords: np.ndarray) -> tuple[np.ndarray, np.ndarray, str]:

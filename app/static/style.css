@@ -103,6 +103,8 @@ input[type=range] { width: 100%; height: var(--tap); margin: 0; background: tran
 label.field, .field > label { display: block; font-weight: 600; font-size: .8125rem; margin: 1rem 0 .3rem; }
 .field { margin: 0 0 1rem; }
 .field > label { margin-top: 0; }
+#ped-field .sub { margin-top: .5rem; font-weight: 400; }
+.walker-line { margin: .4rem 0 0; color: var(--muted); font-size: .875rem; max-width: 75ch; }
 label.check { display: flex; align-items: center; gap: .6rem; min-height: var(--tap); font-weight: 400; }
 label.check input { width: 1.1rem; height: 1.1rem; }
 output { font-weight: 600; color: var(--accent); margin-left: .35rem; }
