@@ -90,7 +90,7 @@ function savePrefs() {
   try {
     localStorage.setItem(PREF_KEY, JSON.stringify({
       drivers: $("drivers").value, n: $("n-drivers").value, by: $("balance-by").value,
-      balance: $("balance").value, zone: $("zone").value, depot: $("depot").value, v: 4, kmtol: $("km-tol").value,
+      balance: $("balance").value, zone: $("zone").value, depot: $("depot").value, v: 4, kmtol: $("km-tol").value, ped: $("ped-on").checked, pedstart: $("ped-start").value.trim(),
       tol: toleranceMin() === defaultToleranceMin() ? null : $("tolerance").value,
     }));
     show("saved-note");
@@ -127,6 +127,8 @@ async function init() {
   state.cfg = await api("/api/config");
   const p = loadPrefs();
   $("depot").value = p.depot || state.cfg.default_depot;
+  $("ped-field").hidden = state.cfg.pedestrian === false;
+  $("ped-on").checked = p.ped !== false; $("ped-start").value = p.pedstart || "";
   if (p.drivers) { $("drivers").value = p.drivers; show("saved-note"); }
   if (p.n) $("n-drivers").value = p.n;
   const fresh = p.v === 4;   // ajustes de divisão antigos (outra escala) não valem mais
@@ -142,7 +144,7 @@ async function init() {
     : `PDF de intimações é lido pelo modelo fixo. Outros PDFs e texto livre são lidos com ${state.cfg.llm}.`;
 
   ["balance", "zone", "balance-by"].forEach((id) => $(id).addEventListener("input", () => { state.fromPrefs = false; }));
-  ["balance", "zone", "balance-by", "drivers", "depot", "tolerance", "km-tol"].forEach((id) => $(id).addEventListener("input", updatePlan));
+  ["balance", "zone", "balance-by", "drivers", "depot", "tolerance", "km-tol", "ped-on", "ped-start"].forEach((id) => $(id).addEventListener("input", updatePlan));
   $("drivers").addEventListener("change", refreshPhones);
   // menu "Mais" fecha ao clicar fora ou com Esc
   document.addEventListener("click", (e) => document.querySelectorAll("details.more[open]").forEach((d) => { if (!d.contains(e.target)) d.open = false; }));
@@ -612,7 +614,7 @@ function updatePlan() {
   const how = preset ? preset.label : `igualar ${BY_LABEL[by]} · ${pct(b)} · zonas ${pct(z)}${kt !== null ? ` · km ±${Math.round(kt * 100)}%` : ""}`;
   $("adv-summary").textContent = `${how} · folga ${tol} min${state.fromPrefs && !seasoned() ? " · da última vez" : ""}`;
   const tel = d.filter((x) => x.phone).length;
-  $("drivers-count").textContent = d.length ? `${d.length} entregador${d.length > 1 ? "es" : ""}${home ? ` · ${home} ${home > 1 ? "saem" : "sai"} de casa` : ""}${tel ? ` · ${tel} com WhatsApp` : ""}` : "";
+  $("drivers-count").textContent = d.length ? `${d.length} entregador${d.length > 1 ? "es" : ""}${home ? ` · ${home} ${home > 1 ? "saem" : "sai"} de casa` : ""}${tel ? ` · ${tel} com WhatsApp` : ""}${$("ped-on").checked && state.cfg.pedestrian ? " · mais 1 a pé no Centro" : ""}` : "";
   const stops = state.okCount ? `${state.okCount} entregas` : "entregas";
   const idle = state.okCount && d.length > state.okCount ? d.length - state.okCount : 0;
   $("plan").textContent = !state.okCount ? "Nenhuma entrega localizada ainda: resolva os endereços para revisar."
@@ -678,6 +680,7 @@ async function solve() {
       depot: { address: $("depot").value.trim() }, drivers: drivers.map(({ label, start }) => ({ label, start })), balance: parseFloat($("balance").value),
       balance_by: $("balance-by").value, zone_weight: parseFloat($("zone").value),
       tolerance_seconds: toleranceMin() * 60, km_tolerance: kmTolerance(),
+      pedestrian: { enabled: $("ped-on").checked && state.cfg.pedestrian !== false, start: { address: $("ped-start").value.trim() } },
     });
     try {   // lembra com qual predefinição este cálculo foi feito (para o veredito e para um recarregamento)
       const m = JSON.parse(sessionStorage.getItem(PRESET_KEY) || "{}");
@@ -815,7 +818,9 @@ function sheetFor(d, r) {
   return el("section", { class: "sheet" },
     el("h1", {}, `Rota — ${d.label}`),
     el("p", { class: "meta" }, `${today} · ${d.count} paradas · ${d.deliveries} entregas · ~${fmtMin(d.total_min)} · ~${Math.round(d.km)} km`),
-    el("p", { class: "meta" }, ownStart(d, r)
+    el("p", { class: "meta" }, d.mode === "pe"
+      ? `A pé · Saída e chegada: ${d.start.address || `${d.start.lat.toFixed(5)}, ${d.start.lon.toFixed(5)}`}`
+      : ownStart(d, r)
       ? `Partida: ${d.start.address || `${d.start.lat.toFixed(5)}, ${d.start.lon.toFixed(5)}`} · Chegada: ${r.depot.address || "ponto padrão"}`
       : `Partida e chegada: ${r.depot.address || "ponto padrão"}`),
     el("table", {}, el("thead", {}, el("tr", {}, ...["#", "Nome", "Endereço", "Rastreio", "Chega em", "Entregue"].map((h) => el("th", {}, h)))), ...bodies),
@@ -859,21 +864,23 @@ function focusRoute(i) {
   $("s3-map").scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
-const range = (a) => (Math.min(...a) === Math.max(...a) ? `${Math.min(...a)}` : `${Math.min(...a)}–${Math.max(...a)}`);
+const range = (a) => !a.length ? "–" : (Math.min(...a) === Math.max(...a) ? `${Math.min(...a)}` : `${Math.min(...a)}–${Math.max(...a)}`);
 const CRIT = { stops: "paradas", time: "tempo de rota", km: "km rodados" };
 
 function renderResult(r) {
   show("s3"); setStep(3);
   const n = r.drivers.length, dr = r.drivers, by = r.balance_by || "stops";
-  const counts = dr.map((d) => d.count), times = dr.map((d) => d.total_min), kms = dr.map((d) => d.km);
+  // O entregador a pé (Centro) fica fora do equilíbrio: faixas, veredito e barras comparam só as motos.
+  const eq = dr.filter((d) => d.mode !== "pe"), walker = dr.find((d) => d.mode === "pe");
+  const counts = eq.map((d) => d.count), times = eq.map((d) => d.total_min), kms = eq.map((d) => d.km);
   const total = counts.reduce((a, b) => a + b, 0), all = dr.flatMap((d) => d.stops);
   const approxN = all.filter((s) => s.precision === "aproximado").length, mostApprox = all.length && approxN / all.length > 0.5;
   const estimated = r.matrix.startsWith("estimativa");
   const metric = (d) => (by === "km" ? d.km : by === "stops" ? d.count : d.total_min);
-  const ms = dr.map(metric), mx = Math.max(...ms), mn = Math.min(...ms);
+  const eqm = eq.map(metric), mx = eqm.length ? Math.max(...eqm) : 0, mn = eqm.length ? Math.min(...eqm) : 0;
   const diff = mx ? Math.round(((mx - mn) / mx) * 100) : 0;
-  const dsp = (arr) => { const m = Math.max(...arr), l = Math.min(...arr); return m ? Math.round(((m - l) / m) * 100) : 0; };
-  const spreads = { km: dsp(kms), entregas: dsp(dr.map((d) => d.deliveries)), tempo: dsp(times) };
+  const dsp = (arr) => { if (!arr.length) return 0; const m = Math.max(...arr), l = Math.min(...arr); return m ? Math.round(((m - l) / m) * 100) : 0; };
+  const spreads = { km: dsp(kms), entregas: dsp(eq.map((d) => d.deliveries)), tempo: dsp(times) };
   // Com tolerância de km, o km é avaliado contra a faixa (±t da média permite até 2t/(1+t) entre menor e maior).
   const kt = r.km_tolerance, kmAllowed = kt ? Math.round(((2 * kt) / (1 + kt)) * 100) : null;
   const worst = Math.max(kt ? 0 : spreads.km, spreads.entregas, spreads.tempo);
@@ -893,31 +900,34 @@ function renderResult(r) {
   ];
   const multi = all.filter((s) => s.n_deliveries > 1).length;
   if (multi) notes.push(`${multi} paradas reúnem várias entregas no mesmo endereço (casa ou condomínio)`);
+  if (walker) notes.push("as entregas da zona do Centro (contorno tracejado no mapa) vão para o entregador a pé, que não entra no equilíbrio");
   if (mostApprox) notes.push(`${approxN} de ${all.length} posições são aproximadas (só a rua foi localizada; a ordem das paradas continua valendo)`);
-  const fmtRange = (a, f) => (Math.min(...a) === Math.max(...a) ? f(a[0]) : `${f(Math.min(...a))}–${f(Math.max(...a))}`);
+  const fmtRange = (a, f) => !a.length ? "–" : (Math.min(...a) === Math.max(...a) ? f(a[0]) : `${f(Math.min(...a))}–${f(Math.max(...a))}`);
   const reviewBtn = el("button", { class: "link", onclick: () => $("review-card").scrollIntoView({ behavior: "smooth", block: "start" }) }, "Revisar endereços");
   $("summary").replaceChildren(
     el("p", { class: "headline" }, `${n} rota${n > 1 ? "s" : ""} pront${n > 1 ? "as" : "a"} · ${r.deliveries} entregas em ${total} paradas`),
     el("dl", { class: "ranges" },
-      el("div", {}, el("dt", {}, "Entregas"), el("dd", {}, range(dr.map((d) => d.deliveries)))),
+      el("div", {}, el("dt", {}, "Entregas"), el("dd", {}, range(eq.map((d) => d.deliveries)))),
       el("div", {}, el("dt", {}, "Tempo"), el("dd", {}, fmtRange(times, fmtMin))),
       el("div", {}, el("dt", {}, "Km"), el("dd", {}, `${fmtRange(kms, Math.round)} km`)),
       el("div", {}, el("dt", {}, "Paradas"), el("dd", {}, range(counts))),
     ),
-    ...(n > 1 ? [el("p", { class: `verdict ${verdictKind}` }, verdictKind === "ok" ? icon("check") : icon("alert"), " ",
+    ...(walker ? [el("p", { class: "walker-line" }, `${walker.label}: ${walker.deliveries} entrega${walker.deliveries === 1 ? "" : "s"} em ${walker.count} parada${walker.count === 1 ? "" : "s"} · ~${fmtMin(walker.total_min)} · ~${Math.round(walker.km)} km, a pé. Fica fora do equilíbrio das motos.`)] : []),
+    ...(r.pedestrian?.warning ? [el("p", { class: "alert-line" }, icon("alert"), " ", r.pedestrian.warning)] : []),
+    ...(eq.length > 1 ? [el("p", { class: `verdict ${verdictKind}` }, verdictKind === "ok" ? icon("check") : icon("alert"), " ",
       `Rotas ${verdictWord}` + (kmOut ? `, mas o km passou da margem de ±${Math.round(kt * 100)}%` : "") +
       `. Diferença entre a menor e a maior: entregas ${spreads.entregas}% · tempo ${spreads.tempo}% · km ${spreads.km}%.`)] : []),
-    ...(n > 1 && worst > 15 ? [outliers(dr, spreads, kt, usedPreset)] : []),
+    ...(eq.length > 1 && worst > 15 ? [outliers(eq, spreads, kt, usedPreset)] : []),
     ...(r.unrouted.length ? [el("p", { class: "alert-line" }, icon("alert"), " ",
       `${r.unrouted.length} entrega${r.unrouted.length > 1 ? "s ficaram" : " ficou"} de fora destas rotas. `, reviewBtn)] : []),
   );
   $("calc-notes").textContent = notes.join(" · ") + ".";
   const byStreet = r.drivers.some((d) => d.path);
   $("legend").textContent = "Cada cor é uma rota e o número marca a primeira parada dela. Círculo grande = partida; pino azul = chegada. "
-    + (byStreet ? "Linhas seguem as ruas." : "Linhas retas, não as ruas.");
+    + (byStreet ? "Linhas seguem as ruas." : "Linhas retas, não as ruas.") + (walker ? " Contorno tracejado = zona do entregador a pé." : "");
   $("csv-all").href = `/api/jobs/${state.job}/export.csv`;
   $("pdf-all").href = `/api/jobs/${state.job}/paginas.pdf`; $("pdf-all").hidden = !r.has_pages;
-  state.texts = dr.map((d) => ({ rota: routeText(d, r.depot.address), links: linksText(d) }));
+  state.texts = dr.map((d) => ({ rota: routeText(d, d.mode === "pe" ? d.end.address || "ponto de saída" : r.depot.address), links: linksText(d) }));
   state.result = r; state.sig = resultSig(r); state.lastCopy = null; state.phones = phoneByLabel();
   const resumed = loadSent(r);
   state.sent = resumed || dr.map(() => ({ rota: false, links: false }));
@@ -928,7 +938,7 @@ function renderResult(r) {
   drawMap(r);
   renderLegend(r);
 
-  const maxM = Math.max(...ms, 1), box = $("drivers-out"); box.replaceChildren();
+  const maxM = Math.max(...eqm, 1), box = $("drivers-out"); box.replaceChildren();
   dr.forEach((d, i) => {
     const body = el("div", { class: "body", hidden: "", id: `body-${i}` });
     const toggle = el("button", { class: "dtoggle", "aria-expanded": "false", "aria-controls": `body-${i}` }, d.label, icon("chevron"));
@@ -955,7 +965,7 @@ function renderResult(r) {
       el("span", { class: "swatch", style: `background:${color(i)}` }, String(i + 1)),
       el("div", { class: "dname" }, el("h3", { class: "dtitle" }, toggle), el("span", { class: "zone" }, zoneTxt, el("span", { class: "chip sent", hidden: "" }, icon("check"), " copiado"))),
       el("div", { class: "dnums" }, el("span", {}, `${d.count} paradas · ${d.deliveries} entregas`), el("span", {}, fmtMin(d.total_min)), el("span", {}, `${Math.round(d.km)} km`)),
-      el("div", { class: "bar", role: "img", "aria-label": `${d.label}: ${CRIT[by]} em relação à maior rota, ${Math.round((metric(d) / maxM) * 100)}%`, style: `--bar:${color(i)}` }, el("i", { style: `width:${(metric(d) / maxM) * 100}%` })),
+      el("div", { class: "bar", role: "img", "aria-label": `${d.label}: ${CRIT[by]} em relação à maior rota, ${Math.round((metric(d) / maxM) * 100)}%`, style: `--bar:${color(i)}` }, el("i", { style: `width:${Math.min(100, (metric(d) / maxM) * 100)}%` })),
       el("div", { class: "dact" }, copyRoute, copyLinks, more),
     );
     const row = el("article", { class: "driver", "data-i": String(i) }, head, body);
@@ -1100,11 +1110,15 @@ function drawMap(r) {
     }
   }
   state.routes.forEach((o) => o.layers.forEach((l) => l.remove())); state.routes = [];
+  if (state.zoneLayer) { state.zoneLayer.remove(); state.zoneLayer = null; }
+  if (r.pedestrian?.active && r.pedestrian.polygon?.length) {   // zona do entregador a pé
+    state.zoneLayer = L.polygon(r.pedestrian.polygon, { color: "#7c3aed", weight: 2, dashArray: "6 6", fillOpacity: 0.06, interactive: false }).addTo(state.map);
+  }
   const all = [[r.depot.lat, r.depot.lon]];
   r.drivers.forEach((d, i) => {
-    const c = color(i), pts = [[d.start.lat, d.start.lon], ...d.stops.map((s) => [s.lat, s.lon]), [r.depot.lat, r.depot.lon]];
+    const c = color(i), pts = [[d.start.lat, d.start.lon], ...d.stops.map((s) => [s.lat, s.lon]), [d.end.lat, d.end.lon]];
     // Com OSRM vem o trajeto por ruas; sem ele, liga as paradas em linha reta.
-    const line = L.polyline(d.path ? decodePolyline(d.path) : pts, { color: c, weight: 2, opacity: 0.6 }).addTo(state.map);
+    const line = L.polyline(d.path ? decodePolyline(d.path) : pts, { color: c, weight: 2, opacity: 0.6, dashArray: d.mode === "pe" ? "6 6" : null }).addTo(state.map);
     const dots = d.stops.map((s) => L.circleMarker([s.lat, s.lon], { radius: 4, color: c, fillColor: c, fillOpacity: 0.9, weight: 1 })
       .bindTooltip(`${d.label} · #${s.order}`).addTo(state.map));
     const layers = [line, ...dots];
@@ -1113,7 +1127,7 @@ function drawMap(r) {
         .bindTooltip(`${d.label}: primeira parada`).addTo(state.map);
       layers.push(pin);
     }
-    const start = L.circleMarker(pts[0], { radius: 8, color: "#000", fillColor: c, fillOpacity: 1, weight: 2 }).bindTooltip(`Partida: ${d.label}`).addTo(state.map);
+    const start = L.circleMarker(pts[0], { radius: 8, color: "#000", fillColor: c, fillOpacity: 1, weight: 2 }).bindTooltip(`${d.mode === "pe" ? "Saída e chegada" : "Partida"}: ${d.label}`).addTo(state.map);
     layers.push(start);
     state.routes.push({ line, dots, layers, pts });
     all.push(...pts);

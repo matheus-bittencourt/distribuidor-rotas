@@ -59,6 +59,12 @@ class Settings:
     osrm_url: str = os.environ.get("OSRM_URL", "http://localhost:5000")
     osrm_block: int = _i("OSRM_BLOCK", 100)     # pontos de origem e de destino por requisição (limite do servidor: 200 no total)
     osrm_workers: int = _i("OSRM_WORKERS", 8)
+    # Entregador a pé: as entregas dentro da zona do Centro (app/pedestrian_zone.json) vão todas para ele
+    pedestrian: bool = os.environ.get("PEDESTRIAN", "1") == "1"
+    osrm_foot_url: str = os.environ.get("OSRM_FOOT_URL", "http://localhost:5001")   # OSRM com o perfil de pedestre
+    walk_speed_kmh: float = _f("WALK_SPEED_KMH", 4.5)             # só na estimativa (sem OSRM de pedestre)
+    walk_detour_factor: float = _f("WALK_DETOUR_FACTOR", 1.25)
+    pedestrian_max_hours: float = _f("PEDESTRIAN_MAX_HOURS", 8.0)  # acima disso o app avisa que a rota a pé é longa
     # Estimativa usada quando não há OSRM
     avg_speed_kmh: float = _f("AVG_SPEED_KMH", 28.0)
     detour_factor: float = _f("DETOUR_FACTOR", 1.35)

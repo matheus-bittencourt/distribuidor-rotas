@@ -19,7 +19,7 @@ def _fmt(p: Point) -> str:
 
 
 def build_links(
-    stops: list[Point], depot: Point, start: Point | None = None, per_link: int = 9,
+    stops: list[Point], depot: Point, start: Point | None = None, per_link: int = 9, mode: str = "driving",
 ) -> list[dict]:
     """stops em ordem de visita; o último destino é sempre o ponto final fixo (`depot`).
 
@@ -32,7 +32,7 @@ def build_links(
     while i < len(seq):
         chunk = seq[i:i + step]
         dest, waypoints = chunk[-1], chunk[:-1]
-        url = "https://www.google.com/maps/dir/?api=1&travelmode=driving"
+        url = f"https://www.google.com/maps/dir/?api=1&travelmode={mode}"
         if origin is not None:
             url += f"&origin={_fmt(origin)}"
         url += f"&destination={_fmt(dest)}"
