@@ -121,6 +121,32 @@ O servidor fica no container `osrm-poa` (`http://localhost:5000`, reinicia com o
 ficam em `osrm-data/` (fora do git). A matriz é pedida em blocos de `OSRM_BLOCK` × `OSRM_BLOCK` pontos,
 `OSRM_WORKERS` em paralelo; um par sem rota mantém a estimativa por linha reta.
 
+### Mapa recortado (só Porto Alegre e arredores)
+
+O mapa do Sul inteiro é desnecessário para entregas só em Porto Alegre. Com `-Recorte` o script corta uma
+caixa (`-51.35,-30.32,-50.95,-29.88`: a cidade mais Canoas, Viamão, Alvorada, Cachoeirinha e Gravataí) antes
+de processar; use `-Bbox "oeste,sul,leste,norte"` para outra caixa. Vale também para `-Foot` e `-Start`.
+
+```powershell
+.\scripts\setup_osrm.ps1 -Recorte          # carro/moto
+.\scripts\setup_osrm.ps1 -Recorte -Foot    # pedestre
+```
+
+Medido na mesma máquina (1ª preparação, sem contar o download do mapa):
+
+| | Sul inteiro | Recortado |
+|---|---|---|
+| Preparo carro (extrair + particionar + customizar) | ~10 min | 10 s (+ 73 s do recorte, feito uma vez) |
+| Preparo pedestre | ~6 min | 10 s |
+| Disco (arquivos `.osrm`, por perfil) | 2,3 GB | ~70 MB |
+| RAM do container em uso | 1,8 GB (carro) / 1,4 GB (pedestre) | ~50 MB cada |
+| Matriz de 960 pontos (carro / pedestre) | 11,1 s / 9,6 s | 2,5 s / 3,6 s |
+| Cálculo ponta a ponta, 1400 entregas e 14 entregadores | ~48 s | 34 s |
+
+As matrizes 100×100 de carro e de pedestre (tempos e metros) saíram **idênticas** às do mapa inteiro nos
+9.900 pares testados. Cuidado: rota para fora da caixa não existe no mapa recortado, e `-Recorte` troca de
+mapa sem apagar o antigo: para liberar ~4,9 GB em `osrm-data/`, apague `sul-latest.osrm*`, `sul-foot.osrm*` e
+`sul-foot.osm.pbf`, mantendo `sul-latest.osm.pbf` (é dele que sai o recorte).
 Medido com os 1400 endereços de teste (~960 pontos distintos) e 14 entregadores: matriz em ~30 s,
 cálculo completo em ~48 s. Em 150 pares reais, a distância por ruas deu ≈ 1,36 × a linha reta (o fator
 1,35 da estimativa está bem calibrado) e o tempo do OSRM ≈ 0,76 × o estimado (~37 km/h médios, **sem
