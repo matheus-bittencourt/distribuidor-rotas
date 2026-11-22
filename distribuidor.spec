@@ -2,7 +2,7 @@
 # o modo arquivo único se descompacta em %TEMP% a cada execução e deixaria rastro no computador).
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
-datas = [("app/static", "app/static"), ("app/zones.json", "app")]
+datas = [("app/static", "app/static"), ("app/zones.json", "app"), ("app/pedestrian_zone.json", "app")]
 binaries, hidden = [], []
 for pkg in ("ortools", "uvicorn"):
     d, b, h = collect_all(pkg)
