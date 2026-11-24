@@ -169,10 +169,10 @@ async function init() {
     try { await post(`/api/jobs/${state.job}/regeocode`, {}); await refresh(); } finally { $("regeo").disabled = false; }
   });
   const drop = $("drop");
-  $("file").addEventListener("change", (e) => { const f = e.target.files[0]; e.target.value = ""; if (f) upload(f); });
+  $("file").addEventListener("change", (e) => { const fs = [...e.target.files]; e.target.value = ""; if (fs.length) upload(fs); });
   ["dragover", "dragenter"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("over"); }));
   ["dragleave", "drop"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
-  drop.addEventListener("drop", (e) => e.dataTransfer.files[0] && upload(e.dataTransfer.files[0]));
+  drop.addEventListener("drop", (e) => e.dataTransfer.files.length && upload([...e.dataTransfer.files]));
   updatePlan();
   const saved = (() => { try { return sessionStorage.getItem(JOB_KEY); } catch { return null; } })();
   if (saved) await restore(saved);
@@ -365,10 +365,10 @@ function resetPanels() {
   show("s1report", false); state.lastDiscard = null; $("empty-busy").hidden = true; setStatus("s2status", ""); setStep(1);
 }
 
-async function upload(file) {
+async function upload(files) {
   if (state.job) await api(`/api/jobs/${state.job}`, { method: "DELETE" }).catch(() => {});
-  resetPanels(); setStatus("s1status", "Enviando…");
-  const fd = new FormData(); fd.append("file", file);
+  resetPanels(); setStatus("s1status", files.length > 1 ? `Enviando ${files.length} arquivos…` : "Enviando…");
+  const fd = new FormData(); files.forEach((f) => fd.append("file", f));
   try {
     const { job_id } = await api("/api/upload", { method: "POST", body: fd });
     state.job = job_id; show("wipe"); setHasJob(true);
@@ -391,18 +391,28 @@ async function pollIngest() {
 
 function chip(text, kind = "") { return el("span", { class: "chip" + (kind ? ` ${kind}` : "") }, text); }
 
+// Envio com vários arquivos: quanto veio de cada um, o que foi repetido e o que não deu para ler.
+function filesList(files) {
+  return el("ul", { class: "files" }, ...files.map((f) => el("li", { class: f.error ? "bad" : "" },
+    el("strong", {}, f.name), " · ",
+    f.error ? `não lido: ${f.error}`
+      : `${f.stops} entrega${f.stops === 1 ? "" : "s"}${f.duplicates ? ` (${f.duplicates} repetida${f.duplicates === 1 ? "" : "s"} de outro arquivo, ignorada${f.duplicates === 1 ? "" : "s"})` : ""}`)));
+}
+
 function renderIngest(j) {
   const c = j.counts, r = j.report;
   state.okCount = c.ok || 0;
+  state.multiFile = (j.files || []).length > 1;
   const box = $("s1report"); box.replaceChildren(); show("s1report");
   box.append(
     el("div", { class: "chips" },
       chip(`${c.ok || 0} localizados`, "ok"),
       ...(c.revisar ? [chip(`${c.revisar} para revisar`, "warn")] : []),
-      chip(`leitura: ${METHOD[r.method] || r.method}`),
+      chip(`leitura: ${r.method.split("+").map((m) => METHOD[m] || m).join(" + ")}`),
       ...r.dropped_columns.map((d) => chip(`coluna ignorada: ${d}`)),
       ...Object.entries(r.masked).map(([k, v]) => chip(`${v} ${MASKED[k] || k} removidos do texto`)),
     ),
+    ...(state.multiFile ? [filesList(j.files)] : []),
     ...r.notes.map((n) => el("p", { class: "hint" }, n)),
   );
   renderReview(j.review);
@@ -436,7 +446,7 @@ function renderReview(list) {
     };
     // Lista vinda do PDF de intimações: em que página está e um atalho para ver o original
     const pg = s.pages && s.pages.length ? el("div", { class: "where" },
-      `PDF: página ${s.pages[0]}${s.pages.length > 1 ? `–${s.pages[s.pages.length - 1]}` : ""}`,
+      `${state.multiFile && s.file ? s.file : "PDF"}: página ${s.pages[0]}${s.pages.length > 1 ? `–${s.pages[s.pages.length - 1]}` : ""}`,
       s.code ? ` · ${s.code}` : "", " · ",
       el("a", { href: `/api/jobs/${state.job}/paginas.pdf?stop=${s.id}`, target: "_blank", rel: "noopener" }, "ver no PDF (nova aba)")) : null;
     box.append(el("div", { class: "row", "data-id": String(s.id) },
@@ -497,6 +507,9 @@ function guessColumns(m) {
 }
 function renderMapping(m) {
   show("map-card"); setStatus("map-error", "");
+  const mf = $("map-file");
+  mf.hidden = !(m.file_total > 1);
+  mf.textContent = m.file_total > 1 ? `Arquivo ${m.file_index} de ${m.file_total}: ${m.file}` : "";
   const head = el("tr", {}, ...m.headers.map((h) => el("th", { class: h.sensitive ? "sens" : "" }, h.sensitive ? icon("lock") : "", " ", h.name || `coluna ${h.index + 1}`)));
   const body = m.sample.map((r) => el("tr", {}, ...m.headers.map((h) => el("td", { class: h.sensitive ? "sens" : "" }, h.sensitive ? "oculto" : r[h.index] ?? ""))));
   $("map-table").replaceChildren(el("table", {}, el("thead", {}, head), el("tbody", {}, body)));

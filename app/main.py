@@ -23,6 +23,7 @@ from .config import FALLBACK_DEPOT, RMPA_CITIES, SETTINGS
 from .extract import COLUMN_LABELS, NeedMapping, extract, llm_provider, to_query
 from .geocode import geocode_stops, in_metro, in_region, make_geocoder
 from .links import build_links
+from .models import ExtractReport
 from starlette.formparsers import MultiPartParser
 
 from . import mapdata, netguard, updater
@@ -31,7 +32,9 @@ from .sanitize import is_sensitive_header, strip_accents
 from .solver import solve
 
 STATIC = Path(__file__).parent / "static"
-MAX_UPLOAD = 25 * 1024 * 1024
+MAX_UPLOAD = 25 * 1024 * 1024          # por arquivo
+MAX_UPLOAD_TOTAL = 100 * 1024 * 1024   # todos os arquivos de um envio
+MAX_FILES = 20
 
 app = FastAPI(title="Distribuidor de rotas (POC)")
 
@@ -180,57 +183,131 @@ def basemap():
 
 # ------------------------------------------------------------------ ingestão
 
-def _ingest(job: jobs.Job, filename: str, data: bytes, mapping: dict | None = None) -> None:
+def _add_file(job: jobs.Job, idx: int, filename: str, data: bytes, stops: list, rep) -> None:
+    """Junta as entregas de um arquivo às do job: renumera, marca a origem e tira código de rastreio já visto."""
+    dup = 0
+    kept = 0
+    for s in stops:
+        if s.code and s.code in job.codes:
+            dup += 1
+            continue
+        if s.code:
+            job.codes.add(s.code)
+        s.id, s.src, s.file = len(job.stops), idx, filename
+        job.stops.append(s)
+        kept += 1
+    if any(s.pages for s in job.stops if s.src == idx):
+        job.sources[idx] = data     # PDF de intimações: o original fica para o PDF de cada entregador
+    job.parts.append((filename, rep))
+    job.files.append({"name": filename, "stops": kept, "rows_read": rep.rows_read, "duplicates": dup,
+                      "method": rep.method, "error": ""})
+
+
+def _combined_report(job: jobs.Job) -> ExtractReport:
+    """Um relatório só: com um arquivo, o dele; com vários, somado e com as notas ao lado do nome do arquivo."""
+    if len(job.parts) == 1 and job.n_files == 1:
+        return job.parts[0][1]
+    out = ExtractReport()
+    methods: set[str] = set()
+    for name, rep in job.parts:
+        methods |= {m for m in rep.method.split("+") if m}
+        out.rows_read += rep.rows_read
+        out.skipped_lines += rep.skipped_lines
+        out.dropped_columns += rep.dropped_columns
+        for k, v in rep.masked.items():
+            out.masked[k] = out.masked.get(k, 0) + v
+        out.notes += [f"{name}: {n}" for n in rep.notes]
+    for f in job.files:
+        if f["error"]:
+            out.notes.append(f"{f['name']}: NÃO foi lido ({f['error']}). As entregas desse arquivo não estão na lista.")
+        elif f["duplicates"]:
+            out.notes.append(f"{f['name']}: {f['duplicates']} entrega(s) com código de rastreio já presente em "
+                             "arquivo anterior foram ignoradas.")
+    out.method = "+".join(sorted(methods)) or "nenhum"
+    return out
+
+
+def _ingest(job: jobs.Job, mapping: dict | None = None) -> None:
+    """Lê os arquivos da fila, um por vez, e geocodifica tudo junto. Se um deles tem colunas que não reconheço,
+    para em 'mapear' com esse arquivo na frente da fila; set_mapping chama de novo e a leitura continua dali."""
     try:
-        job.state, job.message = "lendo", "Lendo o arquivo"
+        multi = job.n_files > 1
+        while job.queue:
+            idx, filename, data = job.queue[0]
+            where = f"Arquivo {idx + 1} de {job.n_files} ({filename}): " if multi else ""
+            job.state, job.message = "lendo", (f"Lendo {filename} ({idx + 1} de {job.n_files})" if multi else "Lendo o arquivo")
 
-        def prog(msg: str):
-            job.message = msg
+            def prog(msg: str, _w=where):
+                job.message = _w + msg
 
-        try:
-            stops, report = extract(filename, data, prog, mapping=mapping)
-        except NeedMapping as nm:
-            job.pending = (filename, data)
-            job.mapping_info = {
-                "headers": [{"index": i, "name": h, "sensitive": bool(h and is_sensitive_header(h))}
-                            for i, h in enumerate(nm.headers)],
-                "sample": nm.sample, "total_rows": nm.total_rows,
-                "fields": [{"key": k, "label": v} for k, v in COLUMN_LABELS.items()],
-            }
-            job.state, job.message = "mapear", ""
-            return
-        job.pending = job.mapping_info = None  # arquivo original sai da memória...
-        if any(s.pages for s in stops):        # ...exceto o PDF de intimações, para o PDF de cada entregador
-            job.source_pdf = data
-        del data
-        job.stops, job.report = stops, report
+            try:
+                stops, report = extract(filename, data, prog, mapping=mapping)
+            except NeedMapping as nm:
+                job.mapping_info = {
+                    "headers": [{"index": i, "name": h, "sensitive": bool(h and is_sensitive_header(h))}
+                                for i, h in enumerate(nm.headers)],
+                    "sample": nm.sample, "total_rows": nm.total_rows,
+                    "fields": [{"key": k, "label": v} for k, v in COLUMN_LABELS.items()],
+                    "file": filename, "file_index": idx + 1, "file_total": job.n_files,
+                }
+                job.state, job.message = "mapear", ""
+                return
+            except Exception as exc:
+                if not multi:
+                    raise
+                # um arquivo ruim não derruba os outros, mas o aviso fica visível no relatório
+                job.files.append({"name": filename, "stops": 0, "rows_read": 0, "duplicates": 0, "method": "", "error": str(exc)})
+                job.queue.pop(0)
+                mapping = None
+                continue
+            mapping = None
+            job.queue.pop(0)          # o arquivo original sai da memória (só o PDF de intimações fica, em job.sources)
+            _add_file(job, idx, filename, data, stops, report)
+            del data
+        job.mapping_info = None
+        if not job.stops:
+            errs = "; ".join(f"{f['name']}: {f['error']}" for f in job.files if f["error"])
+            raise ValueError(errs or "Nenhum endereço foi encontrado nos arquivos.")
+        job.report = _combined_report(job)
         job.state, job.message = "geocodificando", "Localizando endereços no mapa"
-        geocode_stops(stops, lambda a, b: setattr(job, "progress", (a, b)))
+        geocode_stops(job.stops, lambda a, b: setattr(job, "progress", (a, b)))
         job.state, job.message = "revisao", ""
     except Exception as exc:
         job.state, job.error = "erro", str(exc)
 
 
 @app.post("/api/upload")
-async def upload(file: UploadFile = File(...)):
-    data = await file.read()
-    if len(data) > MAX_UPLOAD:
-        raise HTTPException(413, "Arquivo grande demais (limite de 25 MB).")
+async def upload(file: list[UploadFile] = File(...)):
+    """Um ou mais arquivos (o campo `file` repetido): viram uma lista só."""
+    if len(file) > MAX_FILES:
+        raise HTTPException(413, f"Arquivos demais (limite de {MAX_FILES} por envio).")
+    blobs: list[tuple[str, bytes]] = []
+    total = 0
+    for f in file:
+        data = await f.read()
+        if len(data) > MAX_UPLOAD:
+            raise HTTPException(413, f"{f.filename or 'Arquivo'}: grande demais (limite de 25 MB por arquivo).")
+        total += len(data)
+        if total > MAX_UPLOAD_TOTAL:
+            raise HTTPException(413, "Os arquivos juntos passam do limite de 100 MB.")
+        blobs.append((f.filename or "", data))
     job = jobs.create()
-    threading.Thread(target=_ingest, args=(job, file.filename or "", data), daemon=True).start()
+    job.n_files = len(blobs)
+    job.queue = [(i, n, d) for i, (n, d) in enumerate(blobs)]
+    del blobs
+    threading.Thread(target=_ingest, args=(job,), daemon=True).start()
     return {"job_id": job.id}
 
 
 @app.post("/api/jobs/{job_id}/mapping")
 def set_mapping(job_id: str, body: MappingIn):
     job = _job(job_id)
-    if job.state != "mapear" or not job.pending:
+    if job.state != "mapear" or not job.queue:
         raise HTTPException(409, "Este processamento não está esperando o mapeamento de colunas.")
     if body.columns.get("addr") is None:
         raise HTTPException(400, "Indique qual coluna é o endereço.")
-    filename, data = job.pending
     job.state = "lendo"
-    threading.Thread(target=_ingest, args=(job, filename, data, body.model_dump()), daemon=True).start()
+    threading.Thread(target=_ingest, args=(job, body.model_dump()), daemon=True).start()
     return _summary(job)
 
 
@@ -249,7 +326,7 @@ def _summary(job: jobs.Job) -> dict:
     return {
         "id": job.id, "state": job.state, "message": job.message, "error": job.error,
         "progress": list(job.progress), "counts": counts, "total": len(job.stops),
-        "mapping": job.mapping_info,
+        "mapping": job.mapping_info, "files": job.files,
         "report": None if rep is None else {
             "method": rep.method, "rows_read": rep.rows_read, "masked": rep.masked,
             "dropped_columns": sorted(set(rep.dropped_columns)), "skipped_lines": rep.skipped_lines,
@@ -505,7 +582,7 @@ def _run_solve(job: jobs.Job, req: SolveIn) -> None:
             "deliveries": len(ok), "visits": len(visits), "extra_delivery_seconds": extra, "tolerance_seconds": tol,
             "zone_purity": round(sum(a * b for a, b in shares) / max(sum(b for _, b in shares), 1), 2),
             "drivers": drivers_out + ([walker] if walker else []), "pedestrian": pedestrian_out,
-            "has_pages": job.source_pdf is not None,
+            "has_pages": bool(job.sources),
             "unrouted": [s.public() for s in job.stops if s.status == "revisar"],
         }
         job.state, job.message = "pronto", ""
@@ -539,7 +616,7 @@ def pages_pdf(job_id: str, driver: int | None = None, stop: int | None = None):
     from pypdf import PdfReader, PdfWriter
 
     job = _job(job_id)
-    if job.source_pdf is None:
+    if not job.sources:
         raise HTTPException(404, "Esta lista não veio de um PDF de intimações.")
     if stop is not None:
         if not 0 <= stop < len(job.stops):
@@ -552,11 +629,16 @@ def pages_pdf(job_id: str, driver: int | None = None, stop: int | None = None):
         if not drivers:
             raise HTTPException(404, "Entregador não encontrado.")
         ids = [x["id"] for d in drivers for r in d["stops"] for x in r["deliveries"]]
-    reader = PdfReader(io.BytesIO(job.source_pdf))
+    readers: dict[int, PdfReader] = {}     # um por PDF de origem (a lista pode vir de vários)
     writer = PdfWriter()
     for i in ids:
-        for p in job.stops[i].pages:
-            writer.add_page(reader.pages[p])
+        s = job.stops[i]
+        if s.src not in job.sources:
+            continue
+        if s.src not in readers:
+            readers[s.src] = PdfReader(io.BytesIO(job.sources[s.src]))
+        for p in s.pages:
+            writer.add_page(readers[s.src].pages[p])
     if not writer.pages:
         raise HTTPException(404, "Nenhuma página para este entregador.")
     buf = io.BytesIO()

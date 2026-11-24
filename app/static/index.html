@@ -88,9 +88,9 @@
     <h2>Lista do dia</h2>
     <p class="lede">Guardo só nome, endereço e código de rastreio. CPF, valores, telefone e protocolo são descartados neste computador.</p>
     <label class="drop" id="drop">
-      <input type="file" id="file" class="vh" accept=".xlsx,.xlsm,.csv,.txt,.pdf">
-      <strong>Escolha ou arraste o arquivo</strong>
-      <span class="hint">.xlsx, .csv ou PDF · formato modelo <code>ENDEREÇO;NOME;COD_RASTREIO</code></span>
+      <input type="file" id="file" class="vh" accept=".xlsx,.xlsm,.csv,.txt,.pdf" multiple>
+      <strong>Escolha ou arraste os arquivos</strong>
+      <span class="hint">um ou vários (juntos viram uma lista só) · .xlsx, .csv ou PDF · formato modelo <code>ENDEREÇO;NOME;COD_RASTREIO</code></span>
     </label>
     <div id="s1status" class="status" role="status" hidden></div>
     <div id="s1report" hidden></div>
@@ -100,6 +100,7 @@
   <section class="panel" id="map-card" hidden>
     <h2>Indique as colunas</h2>
     <p class="lede">Não reconheci as colunas deste arquivo. Escolha onde estão o endereço (obrigatório), o nome e o código. Colunas sensíveis ficam bloqueadas.</p>
+    <p id="map-file" class="hint" hidden></p>
     <div id="map-table" class="maptable"></div>
     <div class="grid3" id="map-main"></div>
     <details class="how">

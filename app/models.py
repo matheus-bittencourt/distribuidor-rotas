@@ -17,10 +17,12 @@ class Stop:
     reason: str = ""        # motivo quando status == revisar
     zone: str = ""
     pages: list[int] = field(default_factory=list)  # páginas desta entrega no PDF original (intimações)
+    src: int = 0            # de qual arquivo enviado veio (posição na lista de envio)
+    file: str = ""          # nome desse arquivo
 
     def public(self) -> dict:
         return {
-            "id": self.id, "name": self.name, "address": self.address, "code": self.code,
+            "id": self.id, "name": self.name, "address": self.address, "code": self.code, "file": self.file,
             "status": self.status, "lat": self.lat, "lon": self.lon,
             "precision": self.precision, "reason": self.reason, "zone": self.zone,
             "pages": [p + 1 for p in self.pages],  # numeração do PDF original, começando em 1
