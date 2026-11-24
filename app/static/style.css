@@ -130,6 +130,9 @@ body.has-job .drop .hint { display: none; }
 .status.warn { background: var(--warn-bg); color: var(--warn); }
 .status .grow { flex: 1; }
 .chips { display: flex; flex-wrap: wrap; gap: .5rem; margin: .75rem 0 0; }
+.files { list-style: none; margin: .75rem 0 0; padding: 0; display: grid; gap: .25rem; font-size: .875rem; }
+.files li { overflow-wrap: anywhere; }
+.files li.bad { color: var(--bad); }
 .chip { padding: .2rem .7rem; border-radius: 99px; background: var(--field); border: 1px solid var(--line); font-size: .8125rem; }
 .chip.ok { color: var(--ok); } .chip.warn { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
 

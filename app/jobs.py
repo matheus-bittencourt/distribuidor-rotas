@@ -18,7 +18,12 @@ class Job:
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     created: float = field(default_factory=time.time)
     state: str = "lendo"          # lendo | mapear | geocodificando | revisao | calculando | pronto | erro
-    pending: tuple | None = None  # (nome, bytes) do arquivo enquanto espera o mapeamento de colunas
+    # Arquivos ainda não lidos, (posição, nome, bytes): o primeiro fica aqui enquanto espera o mapeamento de colunas.
+    queue: list[tuple[int, str, bytes]] = field(default_factory=list)
+    n_files: int = 1              # quantos arquivos vieram no envio
+    files: list[dict] = field(default_factory=list)   # resultado por arquivo (nome, entregas, duplicadas, erro)
+    parts: list[tuple[str, ExtractReport]] = field(default_factory=list)   # relatório de leitura de cada arquivo
+    codes: set[str] = field(default_factory=set)      # códigos de rastreio já vistos (repetidos entre arquivos saem)
     mapping_info: dict | None = None
     message: str = ""
     progress: tuple[int, int] = (0, 0)
@@ -26,9 +31,9 @@ class Job:
     stops: list[Stop] = field(default_factory=list)
     report: ExtractReport | None = None
     result: dict | None = None
-    # PDF de intimações: o original fica na memória enquanto o job existe, para montar o PDF de cada
-    # entregador com as páginas das entregas dele. Some junto com o job (DELETE ou fim do prazo).
-    source_pdf: bytes | None = None
+    # PDFs de intimações: os originais ficam na memória enquanto o job existe (por posição no envio), para
+    # montar o PDF de cada entregador com as páginas das entregas dele. Somem junto com o job.
+    sources: dict[int, bytes] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 

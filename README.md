@@ -76,6 +76,12 @@ Rua y, 543;Alberto Jota;BR00123POA
 - Formato diferente? A tela mostra uma amostra **mascarada** e você aponta as colunas (nome, endereço,
   código…). Marcando "lembrar", o formato é salvo em `data/templates.json` (só nomes de colunas, nunca
   dados) e nos dias seguintes é reconhecido sozinho.
+- **Vários arquivos de uma vez** (até 20, 25 MB cada e 100 MB no total; escolha ou arraste todos): viram uma
+  lista só, com a origem de cada entrega. Código de rastreio repetido entre arquivos entra uma vez só
+  (a tela mostra quantas foram ignoradas por arquivo; entregas sem código não são comparadas). Pode misturar
+  formatos, e se um deles precisar do mapeamento de colunas a tela pergunta só por ele. Um arquivo que não
+  puder ser lido não derruba os outros: fica marcado em vermelho e nas notas, porque as entregas dele não
+  entram na lista. Com PDFs de intimações, o PDF de cada entregador junta as páginas de cada PDF de origem.
 - Texto livre / PDF / planilha sem colunas: usa IA local (Ollama) ou, sem ela, a heurística.
 
 ## Como cada requisito foi tratado
