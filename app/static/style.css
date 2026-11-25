@@ -446,3 +446,23 @@ kbd { font: 600 .8125rem ui-monospace, Consolas, monospace; padding: 0 .35em; bo
 /* uma coluna: o mapa vem logo depois da fila de envio, antes da lista */
 @container (max-width: 799px) { .s3-map { order: -1; } #map { height: 280px; } }
 .s3-body { display: grid; }
+
+/* Zonas desenhadas por entregador */
+.zones-body { padding-top: .5rem; }
+#zmap { height: min(55vh, 22rem); min-height: 14rem; border: 1px solid var(--line); border-radius: var(--radius); margin: .75rem 0; background: var(--field); }
+#zmap.drawing { cursor: crosshair; }
+.zv { width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 3px solid #0f766e; box-shadow: 0 0 0 1px rgb(0 0 0 / .35); }
+.zm { width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 2px dashed #0f766e; cursor: copy; }
+.zcard { border: 1px solid var(--line); border-radius: var(--radius); padding: .75rem; margin: .75rem 0; background: var(--field); }
+.zhead { display: flex; align-items: center; gap: .6rem; margin-bottom: .5rem; }
+.zhead input { flex: 1; min-width: 0; font-weight: 600; }
+.zsw { width: .9rem; height: .9rem; border-radius: 3px; background: var(--zc, var(--accent)); flex: none; }
+.zgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 0 1rem; }
+.zwho { border: 0; padding: 0; margin: 0 0 .5rem; min-width: 0; }
+.zwho legend { font-weight: 600; font-size: .8125rem; padding: 0; margin-bottom: .1rem; }
+.zwho { display: grid; grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); column-gap: .75rem; }
+.zwho legend, .zwho > p { grid-column: 1 / -1; }
+.zpick { overflow-wrap: anywhere; }
+.zadv > summary { cursor: pointer; min-height: var(--tap); display: flex; align-items: center; color: var(--accent); font-weight: 600; font-size: .8125rem; }
+.zinfo { margin: .4rem 0 .25rem; }
+.warnline { color: var(--warn); }

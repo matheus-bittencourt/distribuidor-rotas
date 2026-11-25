@@ -178,6 +178,7 @@ async function init() {
   if (saved) await restore(saved);
   guideInit();
   mapInit();
+  zonesInit();
 }
 
 // ------------------------------------------------------------------ tutorial "Como usar"
@@ -416,7 +417,7 @@ function renderIngest(j) {
     ...r.notes.map((n) => el("p", { class: "hint" }, n)),
   );
   renderReview(j.review);
-  show("s2"); setStep(2);
+  show("s2"); setStep(2); zonesOnIngest();
   if (!$("drivers").value.trim()) generateList();
   updatePlan();
 }
@@ -678,7 +679,7 @@ async function solve() {
   savePrefs(); setStep(2);
   const btn = $("solve"); btn.dataset.busy = "1"; btn.disabled = true; show("s3", false);
   document.body.classList.remove("has-result"); placeGuide();
-  const t0 = Date.now(), budget = (state.cfg.solver_seconds || 30) + 15;
+  const t0 = Date.now(), budget = (state.cfg.solver_seconds || 30) + 15 + 10 * Z.list.length;
   // O contador muda a cada segundo na tela; o leitor de tela ouve só o início e o fim.
   ["s2status", "empty-busy"].forEach((id) => $(id).setAttribute("aria-live", "off"));
   announce(`Calculando as rotas. Costuma levar até ${budget} segundos.`);
@@ -694,6 +695,7 @@ async function solve() {
       balance_by: $("balance-by").value, zone_weight: parseFloat($("zone").value),
       tolerance_seconds: toleranceMin() * 60, km_tolerance: kmTolerance(),
       pedestrian: { enabled: $("ped-on").checked && state.cfg.pedestrian !== false, start: { address: $("ped-start").value.trim() } },
+      zones: zonesPayload(),
     });
     try {   // lembra com qual predefinição este cálculo foi feito (para o veredito e para um recarregamento)
       const m = JSON.parse(sessionStorage.getItem(PRESET_KEY) || "{}");
@@ -883,10 +885,11 @@ const CRIT = { stops: "paradas", time: "tempo de rota", km: "km rodados" };
 function renderResult(r) {
   show("s3"); setStep(3);
   const n = r.drivers.length, dr = r.drivers, by = r.balance_by || "stops";
-  // O entregador a pé (Centro) fica fora do equilíbrio: faixas, veredito e barras comparam só as motos.
-  const eq = dr.filter((d) => d.mode !== "pe"), walker = dr.find((d) => d.mode === "pe");
+  // O entregador a pé (Centro) e os grupos de zona ficam fora do equilíbrio: faixas, veredito e barras comparam só os livres.
+  const eq = dr.filter((d) => d.mode !== "pe" && !d.group), walker = dr.find((d) => d.mode === "pe" && !d.group);
+  const zones = r.zones || [];
   const counts = eq.map((d) => d.count), times = eq.map((d) => d.total_min), kms = eq.map((d) => d.km);
-  const total = counts.reduce((a, b) => a + b, 0), all = dr.flatMap((d) => d.stops);
+  const total = dr.reduce((a, d) => a + d.count, 0), all = dr.flatMap((d) => d.stops);   // paradas de todas as rotas
   const approxN = all.filter((s) => s.precision === "aproximado").length, mostApprox = all.length && approxN / all.length > 0.5;
   const estimated = r.matrix.startsWith("estimativa");
   const metric = (d) => (by === "km" ? d.km : by === "stops" ? d.count : d.total_min);
@@ -913,6 +916,7 @@ function renderResult(r) {
   ];
   const multi = all.filter((s) => s.n_deliveries > 1).length;
   if (multi) notes.push(`${multi} paradas reúnem várias entregas no mesmo endereço (casa ou condomínio)`);
+  if (zones.length) notes.push(`${zones.length} zona${zones.length > 1 ? "s" : ""} desenhada${zones.length > 1 ? "s" : ""}: cada uma é dividida só entre os entregadores dela`);
   if (walker) notes.push("as entregas da zona do Centro (contorno tracejado no mapa) vão para o entregador a pé, que não entra no equilíbrio");
   if (mostApprox) notes.push(`${approxN} de ${all.length} posições são aproximadas (só a rua foi localizada; a ordem das paradas continua valendo)`);
   const fmtRange = (a, f) => !a.length ? "–" : (Math.min(...a) === Math.max(...a) ? f(a[0]) : `${f(Math.min(...a))}–${f(Math.max(...a))}`);
@@ -927,6 +931,14 @@ function renderResult(r) {
     ),
     ...(walker ? [el("p", { class: "walker-line" }, `${walker.label}: ${walker.deliveries} entrega${walker.deliveries === 1 ? "" : "s"} em ${walker.count} parada${walker.count === 1 ? "" : "s"} · ~${fmtMin(walker.total_min)} · ~${Math.round(walker.km)} km, a pé. Fica fora do equilíbrio das motos.`)] : []),
     ...(r.pedestrian?.warning ? [el("p", { class: "alert-line" }, icon("alert"), " ", r.pedestrian.warning)] : []),
+    ...zones.map((z) => {
+      const ds = dr.filter((d) => d.group === z.name);
+      const line = `${z.name}: ${z.deliveries} entrega${z.deliveries === 1 ? "" : "s"} · ${ds.length} entregador${ds.length === 1 ? "" : "es"} (${z.profile === "pe" ? "a pé" : "moto"}) · ${fmtRange(ds.map((d) => d.total_min), fmtMin)}`
+        + (z.near_border ? ` · ${z.near_border} parada${z.near_border === 1 ? "" : "s"} a até 80 m do contorno (dentro ou fora): confira se estão do lado certo` : "") + ". Fora do equilíbrio dos livres.";
+      return el("p", { class: "walker-line", style: `border-left-color:${zcolor(zones.indexOf(z))}` }, line);
+    }),
+    ...zones.filter((z) => z.warning).map((z) => el("p", { class: "alert-line" }, icon("alert"), ` ${z.name}: ${z.warning}`)),
+    ...(r.zone_warnings || []).map((w) => el("p", { class: "alert-line" }, icon("alert"), ` ${w}`)),
     ...(eq.length > 1 ? [el("p", { class: `verdict ${verdictKind}` }, verdictKind === "ok" ? icon("check") : icon("alert"), " ",
       `Rotas ${verdictWord}` + (kmOut ? `, mas o km passou da margem de ±${Math.round(kt * 100)}%` : "") +
       `. Diferença entre a menor e a maior: entregas ${spreads.entregas}% · tempo ${spreads.tempo}% · km ${spreads.km}%.`)] : []),
@@ -937,7 +949,7 @@ function renderResult(r) {
   $("calc-notes").textContent = notes.join(" · ") + ".";
   const byStreet = r.drivers.some((d) => d.path);
   $("legend").textContent = "Cada cor é uma rota e o número marca a primeira parada dela. Círculo grande = partida; pino azul = chegada. "
-    + (byStreet ? "Linhas seguem as ruas." : "Linhas retas, não as ruas.") + (walker ? " Contorno tracejado = zona do entregador a pé." : "");
+    + (byStreet ? "Linhas seguem as ruas." : "Linhas retas, não as ruas.") + (walker ? " Contorno tracejado = zona do entregador a pé." : "") + ((r.zones || []).length ? " Contornos coloridos = zonas que você desenhou." : "");
   $("csv-all").href = `/api/jobs/${state.job}/export.csv`;
   $("pdf-all").href = `/api/jobs/${state.job}/paginas.pdf`; $("pdf-all").hidden = !r.has_pages;
   state.texts = dr.map((d) => ({ rota: routeText(d, d.mode === "pe" ? d.end.address || "ponto de saída" : r.depot.address), links: linksText(d) }));
@@ -973,7 +985,7 @@ function renderResult(r) {
         ...(r.has_pages ? [el("a", { href: `/api/jobs/${state.job}/paginas.pdf?driver=${d.index}`, target: "_blank", rel: "noopener", onclick: () => (more.open = false) },
           icon("print"), " Intimações desta rota (PDF, nova aba)")] : []),
         el("a", { href: `/api/jobs/${state.job}/export.csv?driver=${d.index}`, onclick: () => (more.open = false) }, icon("download"), " CSV desta rota")));
-    const zoneTxt = d.zones[0] ? `${d.zones[0].name}${d.zones.length > 1 ? ` +${d.zones.length - 1}` : ""}` : "sem paradas";
+    const zoneTxt = d.group ? d.group : d.zones[0] ? `${d.zones[0].name}${d.zones.length > 1 ? ` +${d.zones.length - 1}` : ""}` : "sem paradas";
     const head = el("div", { class: "dhead" },
       el("span", { class: "swatch", style: `background:${color(i)}` }, String(i + 1)),
       el("div", { class: "dname" }, el("h3", { class: "dtitle" }, toggle), el("span", { class: "zone" }, zoneTxt, el("span", { class: "chip sent", hidden: "" }, icon("check"), " copiado"))),
@@ -1111,19 +1123,27 @@ function decodePolyline(s) {
   return out;
 }
 
+// Fundo do mapa: o do pacote offline; sem ele, o servidor do OSM (só fora do modo isolado).
+function addBasemap(map) {
+  const attribution = '© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a>';
+  if (state.cfg.basemap && window.protomapsL) {
+    protomapsL.leafletLayer({ url: "/mapa/basemap.pmtiles", flavor: "light", lang: "pt", maxDataZoom: 15, attribution: `${attribution} · Protomaps` }).addTo(map);
+  } else if (!state.cfg.offline) {
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution }).addTo(map);
+  }
+}
+
 function drawMap(r) {
   if (!state.map) {
     state.map = L.map("map", { preferCanvas: true, maxZoom: 18 });
-    const attribution = '© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a>';
-    // Fundo do mapa: o do pacote offline; sem ele, o servidor do OSM (só fora do modo isolado).
-    if (state.cfg.basemap && window.protomapsL) {
-      protomapsL.leafletLayer({ url: "/mapa/basemap.pmtiles", flavor: "light", lang: "pt", maxDataZoom: 15, attribution: `${attribution} · Protomaps` }).addTo(state.map);
-    } else if (!state.cfg.offline) {
-      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution }).addTo(state.map);
-    }
+    addBasemap(state.map);
   }
   state.routes.forEach((o) => o.layers.forEach((l) => l.remove())); state.routes = [];
   if (state.zoneLayer) { state.zoneLayer.remove(); state.zoneLayer = null; }
+  (state.zoneLayers || []).forEach((l) => l.remove()); state.zoneLayers = [];
+  (r.zones || []).forEach((z, i) => state.zoneLayers.push(
+    L.polygon(z.polygon, { color: zcolor(i), weight: 2, dashArray: z.profile === "pe" ? "6 6" : null, fillOpacity: 0.07 })
+      .bindTooltip(`${z.name} · ${z.deliveries} entrega${z.deliveries === 1 ? "" : "s"}`, { sticky: true }).addTo(state.map)));
   if (r.pedestrian?.active && r.pedestrian.polygon?.length) {   // zona do entregador a pé
     state.zoneLayer = L.polygon(r.pedestrian.polygon, { color: "#7c3aed", weight: 2, dashArray: "6 6", fillOpacity: 0.06, interactive: false }).addTo(state.map);
   }
@@ -1174,7 +1194,7 @@ async function wipe() {
   try { sessionStorage.removeItem(JOB_KEY); } catch {}
   clearSent();
   state.routes.forEach((o) => o.layers.forEach((l) => l.remove())); state.routes = [];
-  resetPanels(); show("wipe", false); setHasJob(false); state.lastDiscard = null;
+  resetPanels(); show("wipe", false); setHasJob(false); state.lastDiscard = null; zonesOnIngest();
   setStatus("s1status", "Pronto: lista, nomes, endereços e rotas foram apagados da memória. O elenco salvo neste navegador não foi tocado.", "ok");
   announce("Dados da sessão apagados");
 }

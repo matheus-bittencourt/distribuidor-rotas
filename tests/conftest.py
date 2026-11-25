@@ -19,3 +19,11 @@ def _isolated_templates(tmp_path, monkeypatch):
     from app import templates
 
     monkeypatch.setattr(templates, "PATH", tmp_path / "templates.json")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_zones(tmp_path, monkeypatch):
+    """Cada teste usa seu próprio arquivo de zonas salvas (nunca o data/zonas.json de verdade)."""
+    from app import zonestore
+
+    monkeypatch.setattr(zonestore, "PATH", tmp_path / "zonas.json")
