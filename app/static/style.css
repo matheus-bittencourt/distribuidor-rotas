@@ -452,7 +452,7 @@ kbd { font: 600 .8125rem ui-monospace, Consolas, monospace; padding: 0 .35em; bo
 #zmap { height: min(55vh, 22rem); min-height: 14rem; border: 1px solid var(--line); border-radius: var(--radius); margin: .75rem 0; background: var(--field); }
 #zmap.drawing { cursor: crosshair; }
 .zv { width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 3px solid #0f766e; box-shadow: 0 0 0 1px rgb(0 0 0 / .35); }
-.zcard { border: 1px solid var(--line); border-left: 4px solid var(--zc, var(--accent)); border-radius: var(--radius); padding: .75rem; margin: .75rem 0; background: var(--field); }
+.zcard { border: 1px solid var(--line); border-radius: var(--radius); padding: .75rem; margin: .75rem 0; background: var(--field); }
 .zhead { display: flex; align-items: center; gap: .6rem; margin-bottom: .5rem; }
 .zhead input { flex: 1; min-width: 0; font-weight: 600; }
 .zsw { width: .9rem; height: .9rem; border-radius: 3px; background: var(--zc, var(--accent)); flex: none; }
