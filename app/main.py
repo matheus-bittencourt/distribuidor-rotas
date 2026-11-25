@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import jobs, pedestrian, templates, zones
+from . import jobs, pedestrian, templates, zonegroups, zones
 from .config import FALLBACK_DEPOT, RMPA_CITIES, SETTINGS
 from .extract import COLUMN_LABELS, NeedMapping, extract, llm_provider, to_query
 from .geocode import geocode_stops, in_metro, in_region, make_geocoder
@@ -84,6 +84,15 @@ class PedestrianIn(BaseModel):
     start: PointIn = PointIn()        # vazio = ponto padrão dentro da zona (Praça da Alfândega)
 
 
+class ZoneIn(BaseModel):
+    name: str = Field("", max_length=60)
+    polygon: list[tuple[float, float]] = Field(min_length=3, max_length=500)   # [lat, lon]
+    profile: Literal["moto", "pe"] = "moto"
+    drivers: list[int] = Field(default_factory=list, max_length=40)           # posições na lista de entregadores
+    start: PointIn = PointIn()                                                # perfil "pe": onde o grupo sai e volta
+    edge_m: float = Field(0.0, ge=0, le=500)                                  # faixa em volta do contorno
+
+
 class SolveIn(BaseModel):
     depot: PointIn
     drivers: list[DriverIn] = Field(min_length=1, max_length=40)
@@ -96,6 +105,7 @@ class SolveIn(BaseModel):
     service_seconds: int | None = Field(None, ge=0, le=1800)
     tolerance_seconds: int | None = Field(None, ge=0, le=1800)   # folga por entrega (padrão: 5 min)
     pedestrian: PedestrianIn = PedestrianIn()
+    zones: list[ZoneIn] = Field(default_factory=list, max_length=12)
 
 
 class StopPatch(BaseModel):
@@ -126,6 +136,8 @@ def config():
         "default_depot": SETTINGS.default_depot,
         "geocoder": SETTINGS.geocoder,
         "pedestrian": SETTINGS.pedestrian,
+        "pedestrian_edge_m": SETTINGS.pedestrian_edge_m,
+        "pedestrian_polygon": pedestrian.polygon().tolist() if SETTINGS.pedestrian else [],
         "matrix": SETTINGS.matrix,
         "llm": {"ollama": "IA local (Ollama)", "anthropic": "API Anthropic"}.get(prov, "nenhuma (heurística)"),
         "service_seconds": SETTINGS.service_seconds,
@@ -414,6 +426,31 @@ def _resolve(point: PointIn, geocoder, fallback: tuple[float, float] | None = No
     return fallback
 
 
+def _zone_specs(req: SolveIn, geocoder=None) -> list[zonegroups.ZoneSpec]:
+    """Zonas desenhadas do pedido, validadas. Com `geocoder`, também localiza o ponto de saída dos grupos a pé."""
+    k = len(req.drivers)
+    out, used = [], set()
+    for n, z in enumerate(req.zones, start=1):
+        name = z.name.strip() or f"Zona {n}"
+        if any(not (-90 <= la <= 90 and -180 <= lo <= 180) for la, lo in z.polygon):
+            raise ValueError(f"Zona \"{name}\": contorno com coordenadas inválidas.")
+        if not z.drivers:
+            raise ValueError(f"Zona \"{name}\": escolha ao menos um entregador para ela.")
+        for d in z.drivers:
+            if not 0 <= d < k:
+                raise ValueError(f"Zona \"{name}\": entregador inexistente na lista.")
+            if d in used or z.drivers.count(d) > 1:
+                raise ValueError(f"Zona \"{name}\": um entregador só pode estar em uma zona.")
+            used.add(d)
+        start = None
+        if z.profile == "pe" and (z.start.address or z.start.lat is not None) and geocoder is not None:
+            start = _resolve(z.start, geocoder)
+            if start is None:
+                raise ValueError(f"Zona \"{name}\": não foi possível localizar o ponto de saída.")
+        out.append(zonegroups.ZoneSpec(name, np.array(z.polygon, dtype=float), z.profile, list(z.drivers), start, z.edge_m))
+    return out
+
+
 def _run_solve(job: jobs.Job, req: SolveIn) -> None:
     try:
         geocoder = make_geocoder()
@@ -471,10 +508,22 @@ def _run_solve(job: jobs.Job, req: SolveIn) -> None:
         visit_service = np.array([service + extra * (len(v) - 1) + tol * len(v) for v in visits], dtype=np.int64)
         time_limit = req.time_limit or SETTINGS.solver_seconds
 
-        # Entregador a pé: toda entrega dentro da zona do Centro vai para ele; o resto, para as motos.
+        # Zonas: a zona a pé do Centro vem primeiro; depois as zonas desenhadas (cada uma com seu grupo de
+        # entregadores); o resto vai para os entregadores livres (os que não estão em nenhuma zona).
         ped_on = SETTINGS.pedestrian and req.pedestrian.enabled
         in_zone = pedestrian.inside(stop_xy) if ped_on else np.zeros(len(visits), dtype=bool)
-        walk_idx, rest_idx = np.flatnonzero(in_zone), np.flatnonzero(~in_zone)
+        specs = _zone_specs(req, geocoder)
+        labels, zone_warnings = zonegroups.assign(stop_xy, in_zone, specs)
+        for zi, z in enumerate(specs):
+            for j in np.flatnonzero(labels == zi):
+                for s in visits[j]:
+                    s.zone = z.name
+        walk_idx, rest_idx = np.flatnonzero(labels == zonegroups.BUILTIN), np.flatnonzero(labels == zonegroups.FREE)
+        zoned = {d for z in specs for d in z.drivers}
+        free_drivers = [i for i in range(len(req.drivers)) if i not in zoned]
+        if rest_idx.size and not free_drivers:
+            raise ValueError("Há entregas fora das zonas e todos os entregadores estão em zonas. "
+                             "Deixe ao menos um entregador livre ou desenhe uma zona para o resto.")
         walk_start, walk_addr = None, ""
         if walk_idx.size:
             ps = req.pedestrian.start
@@ -486,20 +535,48 @@ def _run_solve(job: jobs.Job, req: SolveIn) -> None:
                 dlat, dlon, walk_addr = pedestrian.default_start()
                 walk_start = (dlat, dlon)
 
+        def sub(idx):
+            return dict(stop_service=visit_service[idx], stop_deliveries=np.array([len(visits[j]) for j in idx]))
+
         res = solve(
-            stop_xy[rest_idx].reshape(-1, 2), np.array(starts), np.array(depot), matrix_fn,
+            stop_xy[rest_idx].reshape(-1, 2), np.array([starts[i] for i in free_drivers]).reshape(-1, 2),
+            np.array(depot), matrix_fn,
             service_seconds=service, balance=req.balance, time_limit=time_limit,
             zone_idx=zone_idx[rest_idx], zone_centers=zone_centers, zone_weight=zw, balance_by=req.balance_by,
-            stop_service=visit_service[rest_idx], stop_deliveries=np.array([len(visits[j]) for j in rest_idx]),
-            km_tolerance=req.km_tolerance,
+            km_tolerance=req.km_tolerance, **sub(rest_idx),
         )
+        total_seconds = res.total_seconds
         wres = None
         if walk_idx.size:   # uma só rota, de pedestre, que sai e volta ao ponto dele; sem equilibrar com as motos
             wres = solve(
                 stop_xy[walk_idx], np.array([walk_start]), np.array(walk_start), walk_matrix_fn,
-                service_seconds=service, balance=0.0, time_limit=min(time_limit, 15),
-                stop_service=visit_service[walk_idx], stop_deliveries=np.array([len(visits[j]) for j in walk_idx]),
+                service_seconds=service, balance=0.0, time_limit=min(time_limit, 15), **sub(walk_idx),
             )
+            total_seconds += wres.total_seconds
+        zone_runs = []      # (zona, paradas, resultado, ponto de saída do grupo a pé)
+
+        def zlimit(idx):    # grupo pequeno não precisa do tempo todo
+            return max(3, min(time_limit, 15, 2 + len(idx) // 20))
+
+        for zi, z in enumerate(specs):
+            idx = np.flatnonzero(labels == zi)
+            zstart = None
+            if z.profile == "pe":
+                zstart = z.start or (tuple(stop_xy[idx][np.argmin(((stop_xy[idx] - z.polygon.mean(0)) ** 2).sum(1))])
+                                     if idx.size else tuple(z.polygon.mean(0)))
+                zsol = solve(
+                    stop_xy[idx].reshape(-1, 2), np.array([zstart] * len(z.drivers)), np.array(zstart), walk_matrix_fn,
+                    service_seconds=service, balance=req.balance if len(z.drivers) > 1 else 0.0,
+                    time_limit=zlimit(idx), balance_by=req.balance_by, **sub(idx),
+                )
+            else:
+                zsol = solve(
+                    stop_xy[idx].reshape(-1, 2), np.array([starts[d] for d in z.drivers]), np.array(depot), matrix_fn,
+                    service_seconds=service, balance=req.balance, time_limit=zlimit(idx),
+                    balance_by=req.balance_by, km_tolerance=req.km_tolerance, **sub(idx),
+                )
+            total_seconds += zsol.total_seconds
+            zone_runs.append((z, idx, zsol, zstart))
         if not method["v"]:
             method["v"] = method["w"] or "estimativa"
 
@@ -536,38 +613,62 @@ def _run_solve(job: jobs.Job, req: SolveIn) -> None:
                                      mode="walking" if mode == "pe" else "driving"),
             }
 
-        drivers_out = []
-        for i, d in enumerate(req.drivers):
-            idxs = [int(rest_idx[j]) for j in res.routes[i]]
-            drivers_out.append(make_driver(
+        built: dict[int, dict] = {}
+        for j, i in enumerate(free_drivers):
+            d = req.drivers[i]
+            idxs = [int(rest_idx[x]) for x in res.routes[j]]
+            built[i] = make_driver(
                 i, d.label or f"Entregador {i + 1}", starts[i], d.start.address or "", idxs,
-                res.leg_seconds[i], res.leg_meters[i], depot, req.depot.address or "", "moto"))
+                res.leg_seconds[j], res.leg_meters[j], depot, req.depot.address or "", "moto")
+            built[i]["group"] = ""
+        for z, idx, zsol, zstart in zone_runs:
+            for j, g in enumerate(z.drivers):
+                d = req.drivers[g]
+                idxs = [int(idx[x]) for x in zsol.routes[j]]
+                label = d.label or f"Entregador {g + 1}"
+                if z.profile == "pe":
+                    built[g] = make_driver(g, label, zstart, "", idxs, zsol.leg_seconds[j], zsol.leg_meters[j],
+                                           zstart, "", "pe")
+                else:
+                    built[g] = make_driver(g, label, starts[g], d.start.address or "", idxs, zsol.leg_seconds[j],
+                                           zsol.leg_meters[j], depot, req.depot.address or "", "moto")
+                built[g]["group"] = z.name
+        drivers_out = [built[i] for i in range(len(req.drivers))]
         walker = None
         if wres is not None:
             idxs = [int(walk_idx[j]) for j in wres.routes[0]]
             walker = make_driver(len(req.drivers), pedestrian.LABEL, walk_start, walk_addr, idxs,
                                  wres.leg_seconds[0], wres.leg_meters[0], walk_start, walk_addr, "pe")
+            walker["group"] = ""
 
         # Trajeto por ruas para o mapa (OSRM ou malha offline; na estimativa, linhas retas entre as paradas).
         def route_pts(d):
             return ([(d["start"]["lat"], d["start"]["lon"]), *((s["lat"], s["lon"]) for s in d["stops"]),
                      (d["end"]["lat"], d["end"]["lon"])] if d["stops"] else [])
 
-        for d in drivers_out + ([walker] if walker else []):
+        all_out = drivers_out + ([walker] if walker else [])
+        for d in all_out:
             d["path"] = None
-        if method["v"] in ("osrm", "ruas") and rest_idx.size:
+        moto_out = [d for d in all_out if d["mode"] == "moto"]
+        if method["v"] in ("osrm", "ruas") and any(d["stops"] for d in moto_out):
             job.message = "Traçando o trajeto por ruas"
-            pts = [route_pts(d) for d in drivers_out]
+            pts = [route_pts(d) for d in moto_out]
             try:
                 paths = osrm_paths(pts) if method["v"] == "osrm" else mapdata.router().paths(pts)
             except Exception:
                 paths = [None] * len(pts)
-            for d, p in zip(drivers_out, paths):
+            for d, p in zip(moto_out, paths):
                 d["path"] = p
-        if walker and method["w"] == "osrm":
-            walker["path"] = osrm_paths([route_pts(walker)], base_url=SETTINGS.osrm_foot_url, profile="walking")[0]
+        foot_out = [d for d in all_out if d["mode"] == "pe" and d["stops"]]
+        if foot_out and method["w"] == "osrm":
+            try:
+                for d, p in zip(foot_out, osrm_paths([route_pts(d) for d in foot_out],
+                                                     base_url=SETTINGS.osrm_foot_url, profile="walking")):
+                    d["path"] = p
+            except Exception:
+                pass
 
-        shares = [(d["main_zone_share"], d["count"]) for d in drivers_out if d["count"]]
+        shares = [(d["main_zone_share"], d["count"]) for d in drivers_out if d["count"] and not d["group"]]
         pedestrian_out = {"enabled": bool(ped_on), "active": walker is not None,
                           "polygon": pedestrian.polygon().tolist() if ped_on else [],
                           "matrix": method["w"], "warning": ""}
@@ -575,13 +676,32 @@ def _run_solve(job: jobs.Job, req: SolveIn) -> None:
             pedestrian_out["warning"] = (
                 f"A rota a pé tem {walker['deliveries']} entregas e leva cerca de {round(walker['total_min'] / 60, 1)} h, "
                 f"acima de {SETTINGS.pedestrian_max_hours:g} h. Considere dividir a zona do Centro com outro entregador.")
+        free_min = [d["total_min"] for d in drivers_out if not d["group"] and d["stops"]]
+        near = zonegroups.near_border(stop_xy, specs)
+        zones_out = []
+        for zi, z in enumerate(specs):
+            members = [drivers_out[g] for g in z.drivers]
+            longest = max((m["total_min"] for m in members), default=0)
+            warn = ""
+            if z.profile == "pe" and longest > SETTINGS.pedestrian_max_hours * 60:
+                warn = (f"A rota mais longa a pé leva cerca de {round(longest / 60, 1)} h, acima de "
+                        f"{SETTINGS.pedestrian_max_hours:g} h. Coloque mais entregadores nesta zona.")
+            elif z.profile == "moto" and free_min and longest > 1.3 * (sum(free_min) / len(free_min)):
+                warn = (f"As rotas desta zona levam até {round(longest / 60, 1)} h, bem mais que as "
+                        f"{round(sum(free_min) / len(free_min) / 60, 1)} h médias dos entregadores livres. "
+                        "Considere mais entregadores nela.")
+            zones_out.append({
+                "name": z.name, "profile": z.profile, "polygon": z.polygon.tolist(), "drivers": z.drivers,
+                "visits": int((labels == zi).sum()), "deliveries": sum(m["deliveries"] for m in members),
+                "near_border": near[zi], "warning": warn,
+            })
         job.result = {
             "depot": {"lat": depot[0], "lon": depot[1], "address": req.depot.address or ""},
             "balance": req.balance, "balance_by": req.balance_by, "km_tolerance": req.km_tolerance, "zone_weight": zw, "matrix": method["v"], "service_seconds": service,
-            "total_min": round((res.total_seconds + (wres.total_seconds if wres else 0)) / 60), "status": res.status,
+            "total_min": round(total_seconds / 60), "status": res.status,
             "deliveries": len(ok), "visits": len(visits), "extra_delivery_seconds": extra, "tolerance_seconds": tol,
             "zone_purity": round(sum(a * b for a, b in shares) / max(sum(b for _, b in shares), 1), 2),
-            "drivers": drivers_out + ([walker] if walker else []), "pedestrian": pedestrian_out,
+            "drivers": all_out, "pedestrian": pedestrian_out, "zones": zones_out, "zone_warnings": zone_warnings,
             "has_pages": bool(job.sources),
             "unrouted": [s.public() for s in job.stops if s.status == "revisar"],
         }
@@ -595,6 +715,10 @@ def start_solve(job_id: str, req: SolveIn):
     job = _job(job_id)
     if job.state in ("lendo", "mapear", "geocodificando", "calculando"):
         raise HTTPException(409, "Este processamento ainda está em andamento.")
+    try:
+        _zone_specs(req)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     job.state, job.error, job.result = "calculando", "", None
     threading.Thread(target=_run_solve, args=(job, req), daemon=True).start()
     return _summary(job)

@@ -180,6 +180,18 @@ zona vai para ele; as demais seguem para as motos, como antes.
 Medido com os 1400 endereços de teste e 14 entregadores: 32 entregas em 22 paradas na zona, rota a pé de
 ~2h53 e ~7 km; as 14 motos ficaram com 95–101 entregas, 7h09–7h34 e 89–104 km. Cálculo completo em ~52 s.
 
+## Zonas por entregador
+
+Opcional. Em **Zonas por entregador** (etapa dos entregadores) dá para desenhar áreas no mapa e escolher quem atende em cada uma. As entregas dentro de uma zona vão só para os entregadores dela, que as dividem entre si; as de fora vão para os entregadores que ficaram sem zona. Sem zonas, nada muda.
+
+- **Desenhar:** "Desenhar nova zona" e clique nos cantos (clique no primeiro ponto, ou em Concluir, para fechar). "Zona = área visível no mapa" cria um retângulo com o que está na tela, sem precisar clicar. "Editar contorno" permite arrastar os pontos (duplo clique remove um). As zonas ficam salvas só neste navegador (polígonos e nomes, sem dados de entrega).
+- **Como atende:** *moto* sai do ponto padrão (ou da casa do entregador) e volta ao ponto de chegada; *a pé* usa rota de pedestre e sai e volta a um ponto só (campo opcional; sem ele, a parada mais central da zona). Vários entregadores a pé na mesma zona saem do mesmo ponto.
+- **Precedência:** 1) a zona a pé do Centro (fixa) vence sempre: entrega dentro dela vai para o entregador a pé, mesmo que também caia numa zona desenhada (a tela avisa quantas); 2) depois, as zonas na ordem da lista (parada em duas zonas fica com a primeira, com aviso); 3) o resto, para os livres.
+- **Um entregador só em uma zona** e ao menos um por zona. Se sobrar entrega fora das zonas e nenhum entregador livre, o cálculo para com uma mensagem clara.
+- **Equilíbrio:** cada zona equilibra só entre os entregadores dela. O veredito e as faixas da tela comparam apenas os livres; cada zona tem sua linha no resumo e um aviso quando a carga fica bem acima da dos livres (ex.: 410 entregas para 2 entregadores). A sugestão é ajustar a quantidade de entregadores nela.
+- **Faixa de borda (Avançado):** por zona, em metros (padrão 0). Como o endereço é a rua, uma entrega pode cair do outro lado da linha; o resumo mostra quantas paradas ficam a até 80 m do contorno para conferir.
+- **Tempo de cálculo:** cada zona roda o solver à parte (pequena: poucos segundos). Medido com 1400 entregas, 14 entregadores, uma zona de moto com 2 e uma a pé com 1: ~40 s, contra ~35 s sem zonas.
+
 ## Configuração (`.env`)
 
 | Variável | Padrão | Para quê |

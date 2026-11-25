@@ -1,0 +1,245 @@
+"use strict";
+// Zonas desenhadas no mapa, cada uma com seu grupo de entregadores (regras em app/zonegroups.py).
+// Ficam só neste navegador (polígonos e nomes de entregador, nenhum dado de entrega) e valem de um dia para o outro.
+const ZONES_KEY = "distribuidor.zonas.v1";
+const ZCOLORS = ["#0f766e", "#b45309", "#1d4ed8", "#be185d", "#4d7c0f", "#7e22ce", "#b91c1c", "#0e7490"];
+const zcolor = (i) => ZCOLORS[i % ZCOLORS.length];
+const Z = { list: [], map: null, layers: [], stopLayer: null, builtin: null, pts: [], job: null, draft: null, edit: null, editMarkers: [] };
+
+function zLoad() {
+  try {
+    const v = JSON.parse(localStorage.getItem(ZONES_KEY));
+    if (Array.isArray(v)) Z.list = v.filter((z) => z && Array.isArray(z.poly) && z.poly.length >= 3).map((z) => ({
+      name: String(z.name || ""), profile: z.profile === "pe" ? "pe" : "moto", labels: Array.isArray(z.labels) ? z.labels.map(String) : [],
+      start: String(z.start || ""), edge: Number(z.edge) || 0, poly: z.poly.map(([a, b]) => [+a, +b]),
+    }));
+  } catch { /* sem armazenamento: as zonas valem só nesta sessão */ }
+}
+function zSave() { try { localStorage.setItem(ZONES_KEY, JSON.stringify(Z.list)); } catch {} }
+
+// ---- geometria (espelha app/pedestrian.py): dentro do polígono ou a até edgeM metros do contorno
+function zEdgeDist(p, poly) {
+  const kx = 111320 * Math.cos((p[0] * Math.PI) / 180), ky = 111320;
+  let best = Infinity;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    const ax = (a[1] - p[1]) * kx, ay = (a[0] - p[0]) * ky, dx = (b[1] - a[1]) * kx, dy = (b[0] - a[0]) * ky, s2 = dx * dx + dy * dy;
+    const t = s2 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / s2)) : 0;
+    best = Math.min(best, Math.hypot(ax + t * dx, ay + t * dy));
+  }
+  return best;
+}
+function zInside(p, poly, edgeM = 0) {
+  let inside = false;
+  for (let i = 0; i < poly.length; i++) {
+    const [y1, x1] = poly[i], [y2, x2] = poly[(i + 1) % poly.length];
+    if ((y1 > p[0]) !== (y2 > p[0]) && p[1] < x1 + ((p[0] - y1) * (x2 - x1)) / (y2 - y1)) inside = !inside;
+  }
+  return inside || zEdgeDist(p, poly) <= Math.max(edgeM, 1);
+}
+
+// ---- mapa
+function zEnsureMap() {
+  if (Z.map) return;
+  Z.map = L.map("zmap", { preferCanvas: true, maxZoom: 18, doubleClickZoom: false });
+  addBasemap(Z.map);
+  Z.map.setView([-30.03, -51.2], 11);
+  const bp = state.cfg.pedestrian_polygon;
+  if (bp && bp.length) Z.builtin = L.polygon(bp, { color: "#7c3aed", weight: 2, dashArray: "6 6", fillOpacity: 0.06, interactive: false })
+    .bindTooltip("Zona a pé do Centro (fixa)", { sticky: true }).addTo(Z.map);
+  Z.map.on("click", zMapClick);
+}
+async function zLoadStops() {
+  Z.job = state.job; Z.pts = [];
+  if (Z.stopLayer) { Z.stopLayer.remove(); Z.stopLayer = null; }
+  if (!state.job) return;
+  try {
+    const list = await api(`/api/jobs/${state.job}/stops`);
+    Z.pts = list.filter((s) => s.status === "ok" && s.lat != null).map((s) => [s.lat, s.lon]);
+  } catch { return; }
+  if (!Z.map) return;
+  Z.stopLayer = L.layerGroup(Z.pts.map((p) => L.circleMarker(p, { radius: 2.5, color: "#475569", weight: 1, fillOpacity: 0.7, interactive: false }))).addTo(Z.map);
+  if (Z.pts.length && !Z.fitted) { Z.fitted = true; Z.map.fitBounds(L.latLngBounds(Z.pts), { padding: [20, 20] }); }
+}
+function zonesOnIngest() { Z.fitted = false; if ($("zones-box").open) zLoadStops().then(zRenderList); else Z.job = null; }
+
+function zDrawPolygons() {
+  Z.layers.forEach((l) => l.remove()); Z.layers = [];
+  Z.list.forEach((z, i) => {
+    const c = zcolor(i);
+    Z.layers.push(L.polygon(z.poly, { color: c, weight: 2, dashArray: z.profile === "pe" ? "6 6" : null, fillOpacity: 0.1 })
+      .bindTooltip(`${z.name || `Zona ${i + 1}`} · ${z.profile === "pe" ? "a pé" : "moto"}`, { sticky: true }).addTo(Z.map));
+  });
+}
+
+// ---- desenhar
+function zSetMode(drawing) {
+  ["z-new", "z-view"].forEach((id) => show(id, !drawing));
+  ["z-finish", "z-undo", "z-cancel"].forEach((id) => show(id, drawing));
+  $("zmap").classList.toggle("drawing", drawing);
+  $("z-help").textContent = drawing
+    ? "Clique no mapa para marcar os cantos da zona (no mínimo 3). Clique no primeiro ponto ou em Concluir para fechar."
+    : (Z.list.length ? "" : "Nenhuma zona ainda. Sem zonas, todos os entregadores dividem tudo, como sempre.");
+}
+function zDraftDraw() {
+  const d = Z.draft; d.layers.forEach((l) => l.remove()); d.layers = [];
+  if (d.pts.length > 1) d.layers.push(L.polyline(d.pts, { color: "#0f766e", weight: 2, dashArray: "4 4", interactive: false }).addTo(Z.map));
+  d.pts.forEach((p, i) => d.layers.push(L.circleMarker(p, { radius: i === 0 ? 7 : 4, color: "#0f766e", fillColor: "#fff", fillOpacity: 1, weight: 2, interactive: false }).addTo(Z.map)));
+}
+function zStartDraw() {
+  if (Z.edit != null) zStopEdit();
+  zEnsureMap(); Z.draft = { pts: [], layers: [] }; zSetMode(true);
+}
+function zCancelDraw() { if (Z.draft) { Z.draft.layers.forEach((l) => l.remove()); Z.draft = null; } zSetMode(false); }
+function zMapClick(e) {
+  if (!Z.draft) return;
+  const p = [+e.latlng.lat.toFixed(6), +e.latlng.lng.toFixed(6)], d = Z.draft;
+  if (d.pts.length >= 3) {
+    const a = Z.map.latLngToContainerPoint(d.pts[0]), b = Z.map.latLngToContainerPoint(e.latlng);
+    if (Math.hypot(a.x - b.x, a.y - b.y) < 14) return zFinishDraw();
+  }
+  d.pts.push(p); zDraftDraw();
+}
+function zFinishDraw() {
+  const d = Z.draft;
+  if (!d || d.pts.length < 3) { $("z-help").textContent = "Marque pelo menos 3 pontos para fechar a zona."; return; }
+  const poly = d.pts.slice(); zCancelDraw(); zAdd(poly);
+}
+function zAdd(poly) {
+  Z.list.push({ name: `Zona ${Z.list.length + 1}`, profile: "moto", labels: [], start: "", edge: 0, poly });
+  zSave(); zRender();
+  const cards = $("zlist").querySelectorAll(".zcard"); cards[cards.length - 1]?.querySelector("input[type=text]")?.focus();
+  announce("Zona criada. Escolha quem atende nela.");
+}
+function zFromView() {
+  zEnsureMap(); const b = Z.map.getBounds(), r = (v) => +v.toFixed(6);
+  zAdd([[r(b.getSouth()), r(b.getWest())], [r(b.getSouth()), r(b.getEast())], [r(b.getNorth()), r(b.getEast())], [r(b.getNorth()), r(b.getWest())]]);
+}
+
+// ---- editar o contorno: arraste os pontos; duplo clique em um ponto o remove (se sobrarem 3 ou mais)
+function zStopEdit() {
+  Z.editMarkers.forEach((m) => m.remove()); Z.editMarkers = []; Z.edit = null; zRender();
+}
+function zStartEdit(i) {
+  if (Z.draft) zCancelDraw();
+  if (Z.edit != null) zStopEdit();
+  zEnsureMap(); Z.edit = i;
+  const z = Z.list[i];
+  z.poly.forEach((p, k) => {
+    const m = L.marker(p, { draggable: true, icon: L.divIcon({ className: "", html: '<div class="zv"></div>', iconSize: [16, 16], iconAnchor: [8, 8] }), keyboard: false }).addTo(Z.map);
+    m.on("drag", () => { const ll = m.getLatLng(); z.poly[k] = [+ll.lat.toFixed(6), +ll.lng.toFixed(6)]; Z.layers[i]?.setLatLngs(z.poly); });
+    m.on("dragend", () => { zSave(); zRenderList(); });
+    m.on("dblclick", () => { if (z.poly.length > 3) { z.poly.splice(k, 1); zSave(); zStartEdit(i); } });
+    Z.editMarkers.push(m);
+  });
+  $("z-help").textContent = `Editando "${z.name}": arraste os pontos para ajustar; duplo clique em um ponto o remove.`;
+  zRenderList();
+}
+
+// ---- lista de zonas
+function zTaken(label, except) { return Z.list.findIndex((z, i) => i !== except && z.labels.includes(label)); }
+function zCount(z) {
+  let n = 0, ped = 0;
+  const bp = state.cfg.pedestrian_polygon || [];
+  for (const p of Z.pts) {
+    if (!zInside(p, z.poly, z.edge)) continue;
+    if (bp.length && zInside(p, bp, state.cfg.pedestrian_edge_m || 80)) ped++; else n++;
+  }
+  return { n, ped };
+}
+function zRenderList() {
+  const names = parseDrivers().map((d) => d.label);
+  const box = $("zlist"); box.replaceChildren();
+  Z.list.forEach((z, i) => {
+    const c = zcolor(i), id = `zc-${i}`;
+    const name = el("input", { type: "text", id: `${id}-name`, value: z.name, maxlength: "60", "aria-label": `Nome da zona ${i + 1}` });
+    name.addEventListener("input", () => { z.name = name.value; zSave(); zDrawPolygons(); zSummary(); });
+    const profile = el("select", { id: `${id}-profile`, "aria-label": `Como atende ${z.name || `zona ${i + 1}`}` },
+      el("option", { value: "moto" }, "Moto: sai do ponto padrão e volta a ele"), el("option", { value: "pe" }, "A pé: sai e volta ao mesmo ponto"));
+    profile.value = z.profile;
+    profile.addEventListener("change", () => { z.profile = profile.value; zSave(); zRender(); });
+    const start = el("input", { type: "text", id: `${id}-start`, value: z.start, placeholder: "Padrão: a parada mais central da zona", autocomplete: "off" });
+    start.addEventListener("input", () => { z.start = start.value; zSave(); });
+    const edge = el("input", { type: "number", id: `${id}-edge`, min: "0", max: "500", step: "10", value: String(z.edge || 0) });
+    edge.addEventListener("input", () => { z.edge = Math.max(0, Math.min(500, parseFloat(edge.value) || 0)); zSave(); zFillInfo(); });
+    const who = el("fieldset", { class: "zwho" }, el("legend", {}, "Quem atende nesta zona"));
+    if (!names.length) who.append(el("p", { class: "hint" }, "Cadastre os entregadores acima para escolher."));
+    names.forEach((label, k) => {
+      const other = zTaken(label, i);
+      const cb = el("input", { type: "checkbox", value: label, ...(z.labels.includes(label) ? { checked: "" } : {}), ...(other >= 0 ? { disabled: "" } : {}) });
+      cb.addEventListener("change", () => {
+        z.labels = cb.checked ? [...z.labels, label] : z.labels.filter((l) => l !== label); zSave(); zRender();
+      });
+      who.append(el("label", { class: "check zpick" }, cb, el("span", {}, label, other >= 0 ? el("span", { class: "muted" }, ` · já em ${Z.list[other].name || `Zona ${other + 1}`}`) : "")));
+    });
+    const missing = z.labels.filter((l) => !names.includes(l));
+    if (missing.length) who.append(el("p", { class: "hint warnline" }, `Fora da lista de entregadores: ${missing.join(", ")}. Não serão usados.`));
+    const info = el("p", { class: "zinfo hint", id: `${id}-info`, role: "status" });
+    const del = el("button", { type: "button", class: "ghost danger" }, "Remover zona");
+    twoStep(del, "Confirmar: remover", () => { if (Z.edit != null) zStopEdit(); Z.list.splice(i, 1); zSave(); zRender(); announce("Zona removida"); });
+    box.append(el("article", { class: "zcard", style: `--zc:${c}`, "data-i": String(i) },
+      el("div", { class: "zhead" }, el("span", { class: "zsw", "aria-hidden": "true" }), name),
+      el("div", { class: "zgrid" },
+        el("div", { class: "field" }, el("label", { for: `${id}-profile` }, "Como atende"), profile),
+        ...(z.profile === "pe" ? [el("div", { class: "field" }, el("label", { for: `${id}-start` }, "Ponto de saída e chegada (opcional)"), start)] : [])),
+      who,
+      el("details", { class: "zadv" }, el("summary", {}, "Avançado"),
+        el("div", { class: "field" }, el("label", { for: `${id}-edge` }, "Faixa de borda (m)"), edge,
+          el("span", { class: "hint" }, "Entregas até essa distância do contorno também entram na zona. Útil porque o endereço é a rua, e a rua pode ficar do outro lado da linha. 0 = só o que está dentro."))),
+      info,
+      el("div", { class: "actions tight" },
+        el("button", { type: "button", class: "ghost", onclick: () => { zEnsureMap(); Z.map.fitBounds(L.polygon(z.poly).getBounds(), { padding: [20, 20] }); } }, "Ver no mapa"),
+        el("button", { type: "button", class: "ghost", "aria-pressed": String(Z.edit === i), onclick: () => (Z.edit === i ? zStopEdit() : zStartEdit(i)) }, Z.edit === i ? "Concluir edição" : "Editar contorno"),
+        del)));
+  });
+  zFillInfo(); zSummary();
+}
+function zFillInfo() {
+  Z.list.forEach((z, i) => {
+    const info = document.getElementById(`zc-${i}-info`); if (!info) return;
+    const parts = [];
+    if (!z.labels.length) parts.push("Escolha ao menos um entregador: sem isso o cálculo não roda.");
+    if (Z.pts.length) {
+      const { n, ped } = zCount(z);
+      parts.push(`${n} entrega${n === 1 ? "" : "s"} da lista de hoje dentro desta zona` + (z.labels.length > 1 ? `, divididas entre ${z.labels.length} entregadores` : ""));
+      if (ped) parts.push(`${ped} delas estão na zona a pé do Centro e ficam com o entregador a pé`);
+      if (n && n / Math.max(z.labels.length, 1) > 90) parts.push("muita entrega por entregador: considere mais gente nesta zona");
+    } else parts.push("Carregue a lista do dia para ver quantas entregas caem aqui.");
+    info.textContent = parts.join(" · ") + ".";
+    info.classList.toggle("warnline", !z.labels.length);
+  });
+}
+function zSummary() {
+  const n = Z.list.length, k = new Set(Z.list.flatMap((z) => z.labels)).size;
+  $("zones-summary").textContent = n ? `${n} zona${n > 1 ? "s" : ""} · ${k} entregador${k === 1 ? "" : "es"} nelas` : "nenhuma";
+}
+function zRender() { if (Z.map) zDrawPolygons(); zRenderList(); if (!Z.draft) zSetMode(false); }
+
+// ---- usado por app.js
+function zonesPayload() {
+  const names = parseDrivers().map((d) => d.label);
+  return Z.list.map((z, i) => {
+    const m = z.start.trim().match(/^(-?\d{1,2}[.,]\d+)\s*[,; ]\s*(-?\d{1,3}[.,]\d+)$/);
+    const start = z.profile !== "pe" || !z.start.trim() ? {} : m ? { lat: parseFloat(m[1].replace(",", ".")), lon: parseFloat(m[2].replace(",", ".")) } : { address: z.start.trim() };
+    return { name: z.name.trim() || `Zona ${i + 1}`, polygon: z.poly, profile: z.profile, drivers: z.labels.map((l) => names.indexOf(l)).filter((k) => k >= 0), start, edge_m: z.edge || 0 };
+  });
+}
+
+function zonesInit() {
+  zLoad();
+  const box = $("zones-box");
+  zSetMode(false); zRenderList();
+  box.addEventListener("toggle", () => {
+    if (!box.open) return;
+    zEnsureMap(); zDrawPolygons();
+    setTimeout(() => { Z.map.invalidateSize(); if (Z.job !== state.job) zLoadStops().then(zRenderList); else if (Z.pts.length && !Z.fitted) { Z.fitted = true; Z.map.fitBounds(L.latLngBounds(Z.pts), { padding: [20, 20] }); } }, 50);
+  });
+  $("z-new").addEventListener("click", zStartDraw);
+  $("z-view").addEventListener("click", zFromView);
+  $("z-finish").addEventListener("click", zFinishDraw);
+  $("z-cancel").addEventListener("click", zCancelDraw);
+  $("z-undo").addEventListener("click", () => { if (Z.draft && Z.draft.pts.length) { Z.draft.pts.pop(); zDraftDraw(); } });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && Z.draft) zCancelDraw(); });
+  let t; $("drivers").addEventListener("input", () => { clearTimeout(t); t = setTimeout(zRenderList, 400); });   // nomes mudaram: refaz as escolhas
+  if (Z.list.length) box.open = false;
+}
