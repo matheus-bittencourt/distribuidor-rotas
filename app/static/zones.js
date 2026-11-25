@@ -1,21 +1,34 @@
 "use strict";
 // Zonas desenhadas no mapa, cada uma com seu grupo de entregadores (regras em app/zonegroups.py).
-// Ficam só neste navegador (polígonos e nomes de entregador, nenhum dado de entrega) e valem de um dia para o outro.
+// Ficam salvas no servidor, em data/zonas.json (ao lado do executável: acompanham o pen drive e não dependem da
+// porta nem do navegador). Cópia em localStorage como reserva. Nenhum dado de entrega vai para lá.
 const ZONES_KEY = "distribuidor.zonas.v1";
 const ZCOLORS = ["#0f766e", "#b45309", "#1d4ed8", "#be185d", "#4d7c0f", "#7e22ce", "#b91c1c", "#0e7490"];
 const zcolor = (i) => ZCOLORS[i % ZCOLORS.length];
 const Z = { list: [], map: null, layers: [], stopLayer: null, builtin: null, pts: [], job: null, draft: null, edit: null, editMarkers: [] };
 
-function zLoad() {
-  try {
-    const v = JSON.parse(localStorage.getItem(ZONES_KEY));
-    if (Array.isArray(v)) Z.list = v.filter((z) => z && Array.isArray(z.poly) && z.poly.length >= 3).map((z) => ({
-      name: String(z.name || ""), profile: z.profile === "pe" ? "pe" : "moto", labels: Array.isArray(z.labels) ? z.labels.map(String) : [],
-      start: String(z.start || ""), edge: Number(z.edge) || 0, poly: z.poly.map(([a, b]) => [+a, +b]),
-    }));
-  } catch { /* sem armazenamento: as zonas valem só nesta sessão */ }
+const zClean = (v) => (Array.isArray(v) ? v : []).filter((z) => z && Array.isArray(z.poly) && z.poly.length >= 3).map((z) => ({
+  name: String(z.name || ""), profile: z.profile === "pe" ? "pe" : "moto", labels: Array.isArray(z.labels) ? z.labels.map(String) : [],
+  start: String(z.start || ""), edge: Number(z.edge) || 0, poly: z.poly.map(([a, b]) => [+a, +b]),
+}));
+async function zLoad() {
+  let fromServer = null;
+  try { fromServer = zClean((await api("/api/zonas")).zones); } catch { /* servidor sem o arquivo: usa a reserva do navegador */ }
+  let local = [];
+  try { local = zClean(JSON.parse(localStorage.getItem(ZONES_KEY))); } catch {}
+  if (fromServer && fromServer.length) Z.list = fromServer;
+  else if (local.length) { Z.list = local; zSave(); }          // zonas da versão anterior (só no navegador): passam para o arquivo
 }
-function zSave() { try { localStorage.setItem(ZONES_KEY, JSON.stringify(Z.list)); } catch {} }
+let zTimer = null;
+function zSave() {
+  try { localStorage.setItem(ZONES_KEY, JSON.stringify(Z.list)); } catch {}
+  clearTimeout(zTimer);
+  zTimer = setTimeout(async () => {
+    const note = $("z-save");
+    try { await api("/api/zonas", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ zones: Z.list }) }); note.textContent = "Zonas salvas no arquivo data/zonas.json."; note.classList.remove("warnline"); }
+    catch (e) { note.textContent = `Não consegui salvar no arquivo (${e.message}). As zonas ficam só neste navegador.`; note.classList.add("warnline"); }
+  }, 500);
+}
 
 // ---- geometria (espelha app/pedestrian.py): dentro do polígono ou a até edgeM metros do contorno
 function zEdgeDist(p, poly) {
@@ -132,7 +145,14 @@ function zStartEdit(i) {
     m.on("dblclick", () => { if (z.poly.length > 3) { z.poly.splice(k, 1); zSave(); zStartEdit(i); } });
     Z.editMarkers.push(m);
   });
-  $("z-help").textContent = `Editando "${z.name}": arraste os pontos para ajustar; duplo clique em um ponto o remove.`;
+  // o "+" no meio de cada lado cria um ponto novo ali (para dar a curva certa a uma rua ou divisa)
+  z.poly.forEach((a, k) => {
+    const b = z.poly[(k + 1) % z.poly.length];
+    const mid = L.marker([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], { icon: L.divIcon({ className: "", html: '<div class="zm" title="Adicionar ponto aqui"></div>', iconSize: [14, 14], iconAnchor: [7, 7] }), keyboard: false }).addTo(Z.map);
+    mid.on("click", (e) => { L.DomEvent.stopPropagation(e); const ll = mid.getLatLng(); z.poly.splice(k + 1, 0, [+ll.lat.toFixed(6), +ll.lng.toFixed(6)]); zSave(); zStartEdit(i); });
+    Z.editMarkers.push(mid);
+  });
+  $("z-help").textContent = `Editando "${z.name}": arraste os círculos cheios para mover os pontos; clique num "+" para criar um ponto novo no meio daquele lado; duplo clique num ponto o remove.`;
   zRenderList();
 }
 
@@ -225,8 +245,8 @@ function zonesPayload() {
   });
 }
 
-function zonesInit() {
-  zLoad();
+async function zonesInit() {
+  await zLoad();
   const box = $("zones-box");
   zSetMode(false); zRenderList();
   box.addEventListener("toggle", () => {

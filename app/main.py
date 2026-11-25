@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import jobs, pedestrian, templates, zonegroups, zones
+from . import jobs, pedestrian, templates, zonegroups, zonestore, zones
 from .config import FALLBACK_DEPOT, RMPA_CITIES, SETTINGS
 from .extract import COLUMN_LABELS, NeedMapping, extract, llm_provider, to_query
 from .geocode import geocode_stops, in_metro, in_region, make_geocoder
@@ -154,6 +154,17 @@ def config():
         "offline": SETTINGS.offline,
         "basemap": mapdata.basemap_path() is not None,
     }
+
+
+@app.get("/api/zonas")
+def zones_saved():
+    return zonestore.load()
+
+
+@app.put("/api/zonas")
+def zones_save(body: zonestore.SavedZones):
+    zonestore.save(body)
+    return {"saved": len(body.zones)}
 
 
 # ------------------------------------------------------------------ pacote de mapa e atualização

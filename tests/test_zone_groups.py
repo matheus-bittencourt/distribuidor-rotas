@@ -140,3 +140,47 @@ def test_assign_unitario():
     z2 = zonegroups.ZoneSpec("N", np.array(NORTE), drivers=[1])
     labels, warns = zonegroups.assign(xy, np.array([False, False, True]), [z1, z2])
     assert labels.tolist() == [0, 1, zonegroups.BUILTIN] and not warns
+
+
+# ---- zonas salvas no servidor (data/zonas.json): sobrevivem a fechar o app e a mudar de porta/navegador
+def _saved(**kw):
+    return {"name": "Centro-sul", "profile": "moto", "labels": ["Ana", "Beto"], "start": "", "edge": 0,
+            "poly": [[-30.06, -51.21], [-30.05, -51.15], [-30.02, -51.17], [-30.03, -51.2], [-30.045, -51.19]], **kw}
+
+
+def test_zonas_salvas_voltam_iguais_e_o_poligono_nao_vira_retangulo():
+    assert client.get("/api/zonas").json() == {"zones": []}
+    z = _saved()
+    assert client.put("/api/zonas", json={"zones": [z, _saved(name="A pé", profile="pe", start="Praça X", edge=40)]}).json() == {"saved": 2}
+    got = client.get("/api/zonas").json()["zones"]
+    assert [g["name"] for g in got] == ["Centro-sul", "A pé"]
+    assert got[0]["poly"] == z["poly"] and len(got[0]["poly"]) == 5          # os 5 vértices, na ordem
+    assert (got[1]["profile"], got[1]["start"], got[1]["edge"]) == ("pe", "Praça X", 40)
+    assert got[0]["labels"] == ["Ana", "Beto"]
+
+
+def test_zonas_salvas_validacao():
+    assert client.put("/api/zonas", json={"zones": [_saved(poly=[[-30, -51], [-30, -50]])]}).status_code == 422   # < 3 pontos
+    assert client.put("/api/zonas", json={"zones": [_saved(profile="bike")]}).status_code == 422
+    assert client.put("/api/zonas", json={"zones": [_saved()] * 51}).status_code == 422
+    assert client.get("/api/zonas").json() == {"zones": []}                  # nada foi gravado pelos pedidos inválidos
+
+
+def test_arquivo_de_zonas_corrompido_nao_derruba_o_app():
+    from app import zonestore
+
+    zonestore.PATH.write_text("{isso nao e json", encoding="utf-8")
+    assert client.get("/api/zonas").json() == {"zones": []}
+    assert client.put("/api/zonas", json={"zones": [_saved()]}).status_code == 200   # e a próxima gravação conserta
+    assert len(client.get("/api/zonas").json()["zones"]) == 1
+
+
+def test_poligono_irregular_decide_a_zona_e_nao_a_caixa_dele():
+    """Um L: o ponto no vão do L está dentro da caixa do polígono, mas fora dele, e não pode entrar."""
+    L_ = np.array([[-30.06, -51.21], [-30.06, -51.15], [-30.045, -51.15], [-30.045, -51.195], [-30.02, -51.195], [-30.02, -51.21]])
+    xy = np.array([[-30.05, -51.20],     # braço de baixo: dentro
+                   [-30.03, -51.205],    # braço da esquerda: dentro
+                   [-30.03, -51.16]])    # no vão do L: fora, apesar de estar na caixa
+    z = zonegroups.ZoneSpec("L", L_, drivers=[0])
+    labels, _ = zonegroups.assign(xy, np.zeros(3, dtype=bool), [z])
+    assert labels.tolist() == [0, 0, zonegroups.FREE]

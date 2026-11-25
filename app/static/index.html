@@ -158,16 +158,17 @@
     <details class="adv" id="zones-box">
       <summary><span>Zonas por entregador</span><span id="zones-summary" class="muted"></span><svg class="i chev"><use href="#i-chevron"/></svg></summary>
       <div class="zones-body">
-        <p class="hint">Opcional. Desenhe uma área no mapa e escolha quem atende nela: as entregas dentro dela vão só para esses entregadores (com mais de um, eles dividem a zona entre si). As entregas fora de qualquer zona vão para os entregadores que ficaram sem zona. A zona a pé do Centro continua valendo primeiro.</p>
+        <p class="hint">Opcional. Desenhe no mapa uma área de qualquer formato (marque os cantos, quantos precisar) e escolha quem atende nela: as entregas dentro dela vão só para esses entregadores (com mais de um, eles dividem a zona entre si). As entregas fora de qualquer zona vão para os entregadores que ficaram sem zona. A zona a pé do Centro continua valendo primeiro.</p>
         <div id="zmap" role="region" aria-label="Mapa para desenhar zonas"></div>
         <div class="actions tight" id="z-actions">
           <button id="z-new" class="ghost" type="button">Desenhar nova zona</button>
-          <button id="z-view" class="ghost" type="button">Zona = área visível no mapa</button>
+          <button id="z-view" class="ghost" type="button">Atalho: retângulo da tela</button>
           <button id="z-finish" class="primary" type="button" hidden>Concluir zona</button>
           <button id="z-undo" class="ghost" type="button" hidden>Desfazer ponto</button>
           <button id="z-cancel" class="ghost" type="button" hidden>Cancelar</button>
         </div>
         <p id="z-help" class="hint" role="status"></p>
+        <p id="z-save" class="hint" role="status"></p>
         <div id="zlist"></div>
       </div>
     </details>
