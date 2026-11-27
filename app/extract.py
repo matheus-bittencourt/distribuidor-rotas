@@ -64,13 +64,19 @@ def _decode(data: bytes) -> str:
 def _read_csv(data: bytes) -> list[list[str]]:
     text = _decode(data)
     lines = [ln for ln in text.splitlines()[:50] if ln.strip()]
-    best, best_score = "\x00", 0.0  # \x00: nenhum separador (texto livre em uma coluna)
+    # \x00: nenhum separador (texto livre em uma coluna). Um separador vale quando quase todas as linhas têm o
+    # mesmo número dele; entre os que valem, tem preferência o que também bate na PRIMEIRA linha (o cabeçalho).
+    # Sem isso, "Rua X, 12, Bairro, Porto Alegre, RS;Nome;Código" (3+ vírgulas por endereço, ";" como separador)
+    # era lido com a vírgula como separador, porque o cabeçalho (sem vírgulas) passava por "linha fora do padrão".
+    cands: list[tuple[float, bool, str]] = []
     for d in (";", "\t", "|", ","):
         counts = [ln.count(d) for ln in lines]
         common = max(set(counts), key=counts.count) if counts else 0
         share = counts.count(common) / len(counts) if counts else 0
-        if common >= 1 and share >= 0.8 and share * common > best_score:  # colunas consistentes
-            best, best_score = d, share * common
+        if common >= 1 and share >= 0.8:  # colunas consistentes
+            cands.append((share * common, counts[0] == common, d))
+    pool = [c for c in cands if c[1]] or cands
+    best = max(pool)[2] if pool else "\x00"
     return [[c.strip() for c in row] for row in csv.reader(io.StringIO(text), delimiter=best)]
 
 

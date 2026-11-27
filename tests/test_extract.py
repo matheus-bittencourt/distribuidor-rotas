@@ -152,3 +152,28 @@ def test_complement_removal_leaves_no_stray_commas():
     q = to_query("Rua X, 100, Bloco B, apto 302, Bairro Y")
     assert q == "Rua X, 100, Bairro Y, Porto Alegre, RS"
     assert to_query("Rua X, 100, Torre 2, apto 11") == "Rua X, 100, Porto Alegre, RS"
+
+
+def _rows(n, addr):
+    return "".join(f"{addr.format(i=i)};Pessoa {i};COD{i:03d}\n" for i in range(n))
+
+
+def test_ponto_e_virgula_com_varias_virgulas_no_endereco_nao_vira_csv_de_virgula():
+    """O cabeçalho não tem vírgulas e os endereços têm 4: antes a vírgula 'ganhava' e nome e código se perdiam."""
+    csv = "ENDEREÇO;NOME;COD_RASTREIO\n" + _rows(14, "Rua Teste {i}, {i}, Bairro, Porto Alegre, RS")
+    stops, rep = extract("lista.csv", csv.encode(), force_llm=False)
+    assert len(stops) == 14 and rep.method == "tabela"
+    assert [s.code for s in stops][:3] == ["COD000", "COD001", "COD002"]
+    assert stops[0].name == "Pessoa 0" and "Bairro" in stops[0].address
+
+
+def test_csv_de_virgula_continua_funcionando():
+    csv = "ENDERECO,NOME,COD_RASTREIO\n" + "".join(f'"Rua Teste {i}, {i}",Pessoa {i},COD{i:03d}\n' for i in range(10))
+    stops, _ = extract("lista.csv", csv.encode(), force_llm=False)
+    assert len(stops) == 10 and stops[3].code == "COD003" and stops[3].name == "Pessoa 3"
+
+
+def test_linha_de_titulo_antes_do_cabecalho_nao_derruba_o_separador():
+    csv = "Relatório do dia\nENDEREÇO;NOME;COD_RASTREIO\n" + _rows(12, "Rua Teste {i}, {i}")
+    stops, _ = extract("lista.csv", csv.encode(), force_llm=False)
+    assert len(stops) == 12 and stops[0].code == "COD000"
