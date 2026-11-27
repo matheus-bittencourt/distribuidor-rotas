@@ -179,6 +179,11 @@ async function init() {
     dlg.returnValue = "";
   });
   fabInit();
+  $("move-dialog").addEventListener("close", (e) => {
+    const dlg = e.target, mv = dlg._move; dlg._move = null;
+    if (dlg.returnValue === "go" && mv) commitMove(mv.pv, mv.marked);
+    dlg.returnValue = "";
+  });
   // etapa ainda fechada: focável e anunciada como indisponível, mas sem levar a lugar nenhum
   $("steps").addEventListener("click", (e) => { const a = e.target.closest("a"); if (a && a.getAttribute("aria-disabled") === "true") e.preventDefault(); });
   const drop = $("drop");
@@ -921,7 +926,7 @@ function focusRoute(i) {
 const range = (a) => !a.length ? "–" : (Math.min(...a) === Math.max(...a) ? `${Math.min(...a)}` : `${Math.min(...a)}–${Math.max(...a)}`);
 const CRIT = { stops: "paradas", time: "tempo de rota", km: "km rodados" };
 
-function renderResult(r) {
+function renderResult(r, opts = {}) {
   show("s3"); setStep(3);
   const n = r.drivers.length, dr = r.drivers, by = r.balance_by || "stops";
   // O entregador a pé (Centro) e os grupos de zona ficam fora do equilíbrio: faixas, veredito e barras comparam só os livres.
@@ -1054,7 +1059,55 @@ function renderResult(r) {
   $("sent-last").textContent = resumedN ? `Retomando de onde parou: ${resumedN} entregador${resumedN > 1 ? "es" : ""} já marcado${resumedN > 1 ? "s" : ""} como enviado${resumedN > 1 ? "s" : ""}.` : "";
   updateSendbar(); updatePlan();   // "Calcular rotas" vira "Recalcular rotas"
   // espera o layout assentar e a restauração de rolagem do navegador (no recarregamento o painel acabou de aparecer)
-  setTimeout(() => $("s3").scrollIntoView({ behavior: "smooth", block: "start" }), 300);
+  if (!opts.keepScroll) setTimeout(() => $("s3").scrollIntoView({ behavior: "smooth", block: "start" }), 300);
+  if (r.manual_moves) $("calc-notes").textContent += ` ${r.manual_moves} parada${r.manual_moves > 1 ? "s" : ""} movida${r.manual_moves > 1 ? "s" : ""} à mão: o equilíbrio pode ter piorado.`;
+}
+
+// ---- mover uma parada para outro entregador de moto, com o antes e depois dos dois
+const rangeTxt = (arr, f) => !arr.length ? "–" : (Math.min(...arr) === Math.max(...arr) ? f(arr[0]) : `${f(Math.min(...arr))}–${f(Math.max(...arr))}`);
+function moveSelect(d, s) {
+  const sel = el("select", { class: "move", "aria-label": `Mover a parada ${s.order} (${s.name}) para outro entregador` },
+    el("option", { value: "" }, "Mover para…"),
+    ...state.result.drivers.filter((x) => x.mode === "moto" && x.index !== d.index)
+      .map((x) => el("option", { value: String(x.index) }, `${x.index + 1} · ${x.label}${x.group ? ` (${x.group})` : ""}`)));
+  sel.addEventListener("change", () => startMove(s, sel));
+  return sel;
+}
+async function startMove(s, sel) {
+  const to = parseInt(sel.value); sel.value = "";
+  if (Number.isNaN(to)) return;
+  let pv;
+  try { pv = await post(`/api/jobs/${state.job}/move`, { stop: s.id, to, preview: true }); }
+  catch (e) { $("sent-last").textContent = e.message; announce(e.message); return; }
+  const dr = state.result.drivers, eq = (x) => x.mode !== "pe" && !x.group;
+  const after = dr.map((x) => x.index === pv.from ? { ...x, ...pv.after.from } : x.index === pv.to ? { ...x, ...pv.after.to } : x);
+  const row = (label, b, a) => el("tr", {}, el("th", {}, label),
+    el("td", {}, `${b.deliveries} → ${a.deliveries}`), el("td", {}, `${fmtMin(b.total_min)} → ${fmtMin(a.total_min)}`), el("td", {}, `${Math.round(b.km)} → ${Math.round(a.km)} km`));
+  $("move-lede").textContent = `${pv.deliveries > 1 ? `${pv.deliveries} entregas do mesmo endereço` : "A entrega"} (${pv.address}) sai de ${pv.from_label} e vai para ${pv.to_label}. As duas rotas são reordenadas.`;
+  $("move-table").replaceChildren(
+    el("thead", {}, el("tr", {}, el("th", {}, ""), el("th", {}, "Entregas"), el("th", {}, "Tempo"), el("th", {}, "Km"))),
+    el("tbody", {}, row(pv.from_label, pv.before.from, pv.after.from), row(pv.to_label, pv.before.to, pv.after.to)));
+  const free = dr.filter(eq), freeAfter = after.filter(eq);
+  $("move-balance").textContent = free.some((x) => x.index === pv.from || x.index === pv.to)
+    ? `Entre as rotas livres: tempo ${rangeTxt(free.map((x) => x.total_min), fmtMin)} → ${rangeTxt(freeAfter.map((x) => x.total_min), fmtMin)} · entregas ${rangeTxt(free.map((x) => x.deliveries), String)} → ${rangeTxt(freeAfter.map((x) => x.deliveries), String)}.`
+    : "Nenhuma das duas é uma rota livre: as faixas de equilíbrio das livres não mudam.";
+  const marked = [pv.from, pv.to].filter((k) => state.sent[k] && (state.sent[k].rota || state.sent[k].links)).map((k) => dr.find((x) => x.index === k).label);
+  $("move-warn").hidden = !marked.length;
+  $("move-warn").textContent = marked.length ? `${marked.join(" e ")} já ${marked.length > 1 ? "estão marcados" : "está marcado"} como enviado${marked.length > 1 ? "s" : ""}: a rota muda e a marca será desfeita.` : "";
+  const dlg = $("move-dialog"); dlg._move = { pv, marked };
+  dlg.showModal(); $("move-go").focus();
+}
+async function commitMove(pv, marked) {
+  const keep = state.sent.map((x) => ({ ...x }));
+  keep[pv.from] = { rota: false, links: false }; keep[pv.to] = { rota: false, links: false };
+  try { await post(`/api/jobs/${state.job}/move`, { stop: pv.stop, to: pv.to, preview: false }); }
+  catch (e) { $("sent-last").textContent = e.message; announce(e.message); return; }
+  const r = await api(`/api/jobs/${state.job}/result`);
+  renderResult(r, { keepScroll: true });
+  state.sent = keep; saveSent(); state.sent.forEach((_, i) => refreshSent(i)); updateSendbar();
+  [pv.from, pv.to].forEach((k) => document.querySelector(`.driver[data-i="${k}"] .dtoggle`)?.click());
+  $("sent-last").textContent = `Parada movida de ${pv.from_label} para ${pv.to_label}. As duas rotas foram reordenadas${marked.length ? " e as marcas de envio delas foram desfeitas" : ""}.`;
+  announce($("sent-last").textContent);
 }
 
 // ---- fila de envio: quantos já receberam as duas mensagens e qual é a próxima
@@ -1138,11 +1191,12 @@ function fillBody(body, d, mostApprox) {
       el("td", { class: "num c-n" }, el("span", { class: "ord", style: `--rc:${color(d.index)}` }, String(s.order)), multi ? el("span", { class: "badge" }, `${s.n_deliveries}×`) : ""),
       cell("c-name", (x) => x.name, s.name), cell("c-addr", (x) => x.address, s.address), cell("c-code", (x) => x.code, s.code),
       el("td", { class: "num c-leg" }, `+${Math.round(s.leg_min)} min · ${s.leg_km.toFixed(1).replace(".", ",")} km`),
-      el("td", { class: "num c-eta" }, fmtMin(s.eta_min)));
+      el("td", { class: "num c-eta" }, fmtMin(s.eta_min)),
+      el("td", { class: "c-move" }, ...(d.mode === "moto" && state.result.drivers.filter((x) => x.mode === "moto").length > 1 ? [moveSelect(d, s)] : [])));
   });
   body.append(el("p", { class: "hint" }, "Links do Maps (abra na ordem):"), links,
     el("table", { class: "stops" },
-      el("thead", {}, el("tr", {}, ...["#", "Nome", "Endereço", "Rastreio", "Trecho", "Chega em"].map((h, k) => el("th", { class: [0, 4, 5].includes(k) ? "num" : "" }, h)))),
+      el("thead", {}, el("tr", {}, ...["#", "Nome", "Endereço", "Rastreio", "Trecho", "Chega em", "Mover"].map((h, k) => el("th", { class: [0, 4, 5].includes(k) ? "num" : "" }, h)))),
       el("tbody", {}, rows)));
 }
 

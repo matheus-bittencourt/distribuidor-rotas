@@ -271,6 +271,7 @@ td.num, th.num { text-align: right; white-space: nowrap; }
   .stops .c-addr { grid-column: 2 / 4; }
   .stops .c-code { grid-column: 2; color: var(--muted); }
   .stops .c-leg { grid-column: 3; text-align: right; color: var(--muted); }
+  .stops .c-move { grid-column: 2 / 4; }
   /* parada com várias entregas: cada entrega mantém nome, endereço e código juntos */
   .stops tr.multi .c-n { grid-row: 1 / span var(--span); }
   .stops tr.multi td.c-name, .stops tr.multi td.c-addr, .stops tr.multi td.c-code { display: contents; }
@@ -541,3 +542,10 @@ details.alerts[open] > summary svg:last-child { transform: rotate(180deg); }
   #s3 { display: flex; flex-direction: column; }
   #s3 > h2 { order: -3; } #s3 > .sendbar { order: -2; }
 }
+
+/* mover parada */
+.stops select.move { min-height: 34px; padding: .15rem .4rem; font-size: .875rem; width: 100%; max-width: 13rem; }
+@media (pointer: coarse) { .stops select.move { min-height: var(--tap); } }
+.move-table { width: 100%; margin: .5rem 0; } .move-table th, .move-table td { padding: .4rem .5rem; text-align: left; }
+.move-table thead th { color: var(--muted); font-weight: 600; } .move-table tbody th { font-family: var(--font-head); font-size: 1.0625rem; }
+dialog .actions { margin-top: 1rem; }

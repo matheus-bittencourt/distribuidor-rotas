@@ -109,6 +109,12 @@ class SolveIn(BaseModel):
     zones: list[ZoneIn] = Field(default_factory=list, max_length=12)
 
 
+class MoveIn(BaseModel):
+    stop: int                 # id de uma entrega da parada que vai mudar de rota (vão todas as do mesmo ponto)
+    to: int                   # posição do entregador que recebe
+    preview: bool = True      # True: só calcula antes/depois; False: aplica
+
+
 class StopPatch(BaseModel):
     name: str | None = None
     address: str | None = None
@@ -594,7 +600,10 @@ def _run_solve(job: jobs.Job, req: SolveIn) -> None:
         if not method["v"]:
             method["v"] = method["w"] or "estimativa"
 
+        route_of: dict[int, list[int]] = {}     # paradas (visitas) de cada rota, na ordem: base de "mover parada"
+
         def make_driver(i, label, start, start_addr, idxs, legs, meters, end, end_addr, mode):
+            route_of[i] = [int(x) for x in idxs]
             seq = [visits[j] for j in idxs]
             svc = [int(visit_service[j]) for j in idxs]
             t, rows = 0, []
@@ -719,9 +728,98 @@ def _run_solve(job: jobs.Job, req: SolveIn) -> None:
             "has_pages": bool(job.sources),
             "unrouted": [s.public() for s in job.stops if s.status == "revisar"],
         }
+
+        def move(stop_id: int, to: int, preview: bool) -> dict:
+            """Passa uma parada (e as entregas do mesmo ponto) de uma rota de moto para outra e reordena só essas duas.
+            Com preview=True só devolve antes e depois; a mesma conta é reaproveitada se logo em seguida vier a aplicação."""
+            res_ = job.result
+            by_idx = {d["index"]: d for d in res_["drivers"]}
+            vi = next((j for j, v in enumerate(visits) if any(x.id == stop_id for x in v)), None)
+            if vi is None:
+                raise HTTPException(404, "Entrega não encontrada nas rotas.")
+            src = next((i for i, ix in route_of.items() if vi in ix), None)
+            if src is None:
+                raise HTTPException(404, "Esta entrega não está em nenhuma rota.")
+            if to not in by_idx:
+                raise HTTPException(404, "Entregador não encontrado.")
+            if to == src:
+                raise HTTPException(400, "A parada já está na rota deste entregador.")
+            if by_idx[src]["mode"] != "moto" or by_idx[to]["mode"] != "moto":
+                raise HTTPException(400, "Só dá para mover paradas entre rotas de moto (a rota a pé tem outro cálculo).")
+            key = (stop_id, to)
+            pend = job.pending_move
+            if pend and pend["key"] == key:
+                nsrc, nto, new_routes = pend["src"], pend["to"], pend["routes"]
+            else:
+                saved = {src: list(route_of[src]), to: list(route_of[to])}
+
+                def rebuild(i, idxs):
+                    d = by_idx[i]
+                    start = (d["start"]["lat"], d["start"]["lon"])
+                    order, legs, meters = [], [], []
+                    if idxs:
+                        ix = np.array(idxs)
+                        sol = solve(stop_xy[ix].reshape(-1, 2), np.array([start]), np.array(depot), matrix_fn,
+                                    service_seconds=service, balance=0.0, time_limit=2,
+                                    stop_service=visit_service[ix], stop_deliveries=np.array([len(visits[j]) for j in idxs]))
+                        order, legs, meters = [idxs[x] for x in sol.routes[0]], sol.leg_seconds[0], sol.leg_meters[0]
+                    nd = make_driver(i, d["label"], start, d["start"]["address"], order, legs, meters, depot,
+                                     req.depot.address or "", "moto")
+                    nd["group"], nd["path"] = d["group"], None
+                    if method["v"] in ("osrm", "ruas") and nd["stops"]:
+                        try:
+                            nd["path"] = (osrm_paths([route_pts(nd)]) if method["v"] == "osrm" else mapdata.router().paths([route_pts(nd)]))[0]
+                        except Exception:
+                            nd["path"] = None
+                    return nd, order
+
+                try:
+                    nsrc, o_src = rebuild(src, [j for j in saved[src] if j != vi])
+                    nto, o_to = rebuild(to, saved[to] + [vi])
+                finally:
+                    route_of[src], route_of[to] = saved[src], saved[to]    # a prévia não muda nada
+                new_routes = {src: o_src, to: o_to}
+                job.pending_move = {"key": key, "src": nsrc, "to": nto, "routes": new_routes}
+
+            def brief(d):
+                return {"deliveries": d["deliveries"], "count": d["count"], "total_min": d["total_min"], "km": d["km"]}
+
+            out = {
+                "preview": preview, "stop": stop_id, "from": src, "to": to,
+                "from_label": by_idx[src]["label"], "to_label": by_idx[to]["label"],
+                "deliveries": len(visits[vi]), "address": visits[vi][0].address,
+                "before": {"from": brief(by_idx[src]), "to": brief(by_idx[to])},
+                "after": {"from": brief(nsrc), "to": brief(nto)},
+            }
+            if preview:
+                return out
+            route_of.update(new_routes)
+            old_total = by_idx[src]["total_min"] + by_idx[to]["total_min"]
+            res_["drivers"] = [nsrc if d["index"] == src else nto if d["index"] == to else d for d in res_["drivers"]]
+            res_["total_min"] += nsrc["total_min"] + nto["total_min"] - old_total
+            by2 = {d["index"]: d for d in res_["drivers"]}
+            for z in res_["zones"]:
+                z["deliveries"] = sum(by2[g]["deliveries"] for g in z["drivers"])
+            sh = [(d["main_zone_share"], d["count"]) for d in res_["drivers"] if d["index"] < len(req.drivers) and d["count"] and not d["group"]]
+            res_["zone_purity"] = round(sum(a * b for a, b in sh) / max(sum(b for _, b in sh), 1), 2)
+            res_["manual_moves"] = res_.get("manual_moves", 0) + 1
+            job.pending_move = None
+            return out
+
+        job.mover, job.pending_move = move, None
         job.state, job.message = "pronto", ""
     except Exception as exc:
         job.state, job.error = "erro", str(exc)
+
+
+@app.post("/api/jobs/{job_id}/move")
+def move_stop(job_id: str, body: MoveIn):
+    """Mover uma parada de um entregador de moto para outro, antes de enviar as rotas (preview=True mostra o antes e depois)."""
+    job = _job(job_id)
+    if job.state != "pronto" or job.result is None or job.mover is None:
+        raise HTTPException(409, "Calcule as rotas antes de mover paradas.")
+    with job.lock:
+        return job.mover(body.stop, body.to, body.preview)
 
 
 @app.post("/api/jobs/{job_id}/solve")
@@ -734,6 +832,7 @@ def start_solve(job_id: str, req: SolveIn):
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     job.state, job.error, job.result = "calculando", "", None
+    job.mover = job.pending_move = None
     threading.Thread(target=_run_solve, args=(job, req), daemon=True).start()
     return _summary(job)
 

@@ -311,6 +311,17 @@
   <button type="button" class="primary" id="copy-next-fab"><svg class="i"><use href="#i-copy"/></svg> <span class="swatch mini" id="next-plate-fab" hidden></span><span id="fab-label"></span></button>
 </div>
 
+<dialog id="move-dialog" aria-labelledby="move-title">
+  <form method="dialog">
+    <h2 id="move-title">Mover parada</h2>
+    <p class="hint" id="move-lede"></p>
+    <table class="move-table" id="move-table"></table>
+    <p class="hint" id="move-balance"></p>
+    <p class="hint warnline" id="move-warn" hidden></p>
+    <div class="actions"><button class="primary" id="move-go" value="go">Mover</button><button class="ghost" value="cancel">Cancelar</button></div>
+  </form>
+</dialog>
+
 <dialog id="copy-fallback" aria-labelledby="copy-fallback-title">
   <form method="dialog">
     <h2 id="copy-fallback-title">Copie manualmente</h2>
