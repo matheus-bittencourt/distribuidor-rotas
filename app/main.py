@@ -104,6 +104,7 @@ class SolveIn(BaseModel):
     time_limit: int | None = Field(None, ge=5, le=300)
     service_seconds: int | None = Field(None, ge=0, le=1800)
     tolerance_seconds: int | None = Field(None, ge=0, le=1800)   # folga por entrega (padrão: 5 min)
+    traffic: float = Field(1.0, ge=1.0, le=2.0)   # trânsito esperado: multiplica o tempo de deslocamento das motos (1 = rua livre)
     pedestrian: PedestrianIn = PedestrianIn()
     zones: list[ZoneIn] = Field(default_factory=list, max_length=12)
 
@@ -505,6 +506,8 @@ def _run_solve(job: jobs.Job, req: SolveIn) -> None:
 
         def matrix_fn(coords):
             t, d, method["v"] = build_matrix(coords)
+            if req.traffic != 1.0:      # o mapa não conhece o trânsito do dia: o tempo de deslocamento cresce pelo fator
+                t = np.rint(t * req.traffic).astype(t.dtype)
             return t, d
 
         def walk_matrix_fn(coords):
@@ -710,7 +713,7 @@ def _run_solve(job: jobs.Job, req: SolveIn) -> None:
             "depot": {"lat": depot[0], "lon": depot[1], "address": req.depot.address or ""},
             "balance": req.balance, "balance_by": req.balance_by, "km_tolerance": req.km_tolerance, "zone_weight": zw, "matrix": method["v"], "service_seconds": service,
             "total_min": round(total_seconds / 60), "status": res.status,
-            "deliveries": len(ok), "visits": len(visits), "extra_delivery_seconds": extra, "tolerance_seconds": tol,
+            "deliveries": len(ok), "visits": len(visits), "extra_delivery_seconds": extra, "tolerance_seconds": tol, "traffic": req.traffic,
             "zone_purity": round(sum(a * b for a, b in shares) / max(sum(b for _, b in shares), 1), 2),
             "drivers": all_out, "pedestrian": pedestrian_out, "zones": zones_out, "zone_warnings": zone_warnings,
             "has_pages": bool(job.sources),

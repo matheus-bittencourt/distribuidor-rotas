@@ -60,7 +60,7 @@ function setStep(n) {
     const k = +li.dataset.step, a = li.querySelector("a");
     li.className = k < n ? "done" : k === n ? "current" : "";
     a.setAttribute("aria-current", k === n ? "step" : "false");
-    a.setAttribute("aria-disabled", k > n ? "true" : "false"); a.tabIndex = k > n ? -1 : 0;
+    a.setAttribute("aria-disabled", k > n ? "true" : "false");
     // etapa ainda fechada: diz o que falta, em vez de só aparecer apagada
     a.title = k > n ? (k === 2 ? "Disponível depois de carregar a lista do dia" : "Disponível depois de calcular as rotas") : "";
   });
@@ -95,7 +95,7 @@ function savePrefs() {
   try {
     localStorage.setItem(PREF_KEY, JSON.stringify({
       drivers: $("drivers").value, n: $("n-drivers").value, by: $("balance-by").value,
-      balance: $("balance").value, zone: $("zone").value, depot: $("depot").value, v: 4, kmtol: $("km-tol").value, ped: $("ped-on").checked, pedstart: $("ped-start").value.trim(),
+      balance: $("balance").value, zone: $("zone").value, depot: $("depot").value, v: 4, kmtol: $("km-tol").value, ped: $("ped-on").checked, pedstart: $("ped-start").value.trim(), traffic: $("traffic").value,
       tol: toleranceMin() === defaultToleranceMin() ? null : $("tolerance").value,
     }));
     show("saved-note");
@@ -133,7 +133,7 @@ async function init() {
   const p = loadPrefs();
   $("depot").value = p.depot || state.cfg.default_depot;
   $("ped-field").hidden = state.cfg.pedestrian === false;
-  $("ped-on").checked = p.ped !== false; $("ped-start").value = p.pedstart || "";
+  $("ped-on").checked = p.ped !== false; $("ped-start").value = p.pedstart || ""; $("traffic").value = ["1", "1.2", "1.4"].includes(p.traffic) ? p.traffic : "1";
   if (p.drivers) { $("drivers").value = p.drivers; show("saved-note"); }
   if (p.n) $("n-drivers").value = p.n;
   const fresh = p.v === 4;   // ajustes de divisão antigos (outra escala) não valem mais
@@ -149,7 +149,7 @@ async function init() {
     : `PDF de intimações é lido pelo modelo fixo. Outros PDFs e texto livre são lidos com ${state.cfg.llm}.`;
 
   ["balance", "zone", "balance-by"].forEach((id) => $(id).addEventListener("input", () => { state.fromPrefs = false; }));
-  ["balance", "zone", "balance-by", "drivers", "depot", "tolerance", "km-tol", "ped-on", "ped-start"].forEach((id) => $(id).addEventListener("input", updatePlan));
+  ["balance", "zone", "balance-by", "drivers", "depot", "tolerance", "km-tol", "ped-on", "ped-start", "traffic"].forEach((id) => $(id).addEventListener("input", updatePlan));
   $("drivers").addEventListener("change", refreshPhones);
   // menu "Mais" fecha ao clicar fora ou com Esc
   document.addEventListener("click", (e) => document.querySelectorAll("details.more[open]").forEach((d) => { if (!d.contains(e.target)) d.open = false; }));
@@ -179,6 +179,8 @@ async function init() {
     dlg.returnValue = "";
   });
   fabInit();
+  // etapa ainda fechada: focável e anunciada como indisponível, mas sem levar a lugar nenhum
+  $("steps").addEventListener("click", (e) => { const a = e.target.closest("a"); if (a && a.getAttribute("aria-disabled") === "true") e.preventDefault(); });
   const drop = $("drop");
   $("file").addEventListener("change", (e) => { const fs = [...e.target.files]; e.target.value = ""; if (fs.length) upload(fs); });
   ["dragover", "dragenter"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("over"); }));
@@ -710,7 +712,7 @@ async function solve() {
       // o telefone fica só no navegador: o servidor recebe nome e partida
       depot: { address: $("depot").value.trim() }, drivers: drivers.map(({ label, start }) => ({ label, start })), balance: parseFloat($("balance").value),
       balance_by: $("balance-by").value, zone_weight: parseFloat($("zone").value),
-      tolerance_seconds: toleranceMin() * 60, km_tolerance: kmTolerance(),
+      tolerance_seconds: toleranceMin() * 60, km_tolerance: kmTolerance(), traffic: parseFloat($("traffic").value) || 1,
       pedestrian: { enabled: $("ped-on").checked && state.cfg.pedestrian !== false, start: { address: $("ped-start").value.trim() } },
       zones: zonesPayload(),
     });
@@ -949,6 +951,7 @@ function renderResult(r) {
   const notes = [
     `Tempos e km ${estimated ? "estimados em linha reta (sem as ruas)" : "calculados pelas ruas"}`,
     `tempos com ${Math.round((r.tolerance_seconds ?? 0) / 60)} min de folga por entrega`,
+    ...((r.traffic || 1) > 1 ? [`deslocamento das motos com +${Math.round((r.traffic - 1) * 100)}% de trânsito`] : []),
     `${pct(r.zone_purity)} das paradas ficam na zona principal do entregador`,
   ];
   const outside = n - eq.length, zoneRoutes = dr.filter((d) => d.group).length;
@@ -1083,6 +1086,10 @@ function updateSendbar() {
   $("fab-label").textContent = $("copy-next-label").textContent;
   $("copy-next-fab").querySelector("use").setAttribute("href", !nx ? "#i-check" : wa ? "#i-chat" : "#i-copy");
   $("copy-next-fab").disabled = !nx;
+  for (const id of ["next-plate", "next-plate-fab"]) {
+    const pl = $(id); pl.hidden = !nx;
+    if (nx) { pl.textContent = String(nx.i + 1); pl.style.background = color(nx.i); }
+  }
   syncFab();
 }
 function syncFab() {
@@ -1128,7 +1135,7 @@ function fillBody(body, d, mostApprox) {
       multi ? s.deliveries.map((x, j) => el("div", { class: "d", style: `--r:${3 * j}` }, pick(x), cls === "c-addr" && j === 0 && approx ? mark.cloneNode(true) : "")) : single,
       !multi && cls === "c-addr" && approx ? mark : "");
     return el("tr", multi ? { class: "multi", style: `--span:${3 * s.n_deliveries}` } : {},
-      el("td", { class: "num c-n" }, s.order, multi ? el("span", { class: "badge" }, `${s.n_deliveries}×`) : ""),
+      el("td", { class: "num c-n" }, el("span", { class: "ord", style: `--rc:${color(d.index)}` }, String(s.order)), multi ? el("span", { class: "badge" }, `${s.n_deliveries}×`) : ""),
       cell("c-name", (x) => x.name, s.name), cell("c-addr", (x) => x.address, s.address), cell("c-code", (x) => x.code, s.code),
       el("td", { class: "num c-leg" }, `+${Math.round(s.leg_min)} min · ${s.leg_km.toFixed(1).replace(".", ",")} km`),
       el("td", { class: "num c-eta" }, fmtMin(s.eta_min)));

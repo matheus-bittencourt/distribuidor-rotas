@@ -91,9 +91,7 @@ main { max-width: 1760px; margin: 0 auto; padding: 1rem 1rem 3rem; display: grid
   body.has-job:not(.has-result) #empty { display: none; }
 }
 .panel { container-type: inline-size; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 1.25rem; min-width: 0; }
-/* número da etapa no título do painel, igual ao da linha de percurso do topo */
-#s1 > h2::before, #s2 > h2::before, #s3 > h2::before { display: inline-grid; place-items: center; width: 1.75rem; height: 1.75rem; border-radius: 50%; background: var(--ink); color: var(--panel); font: 700 1rem/1 var(--font-head); flex: none; }
-#s1 > h2::before { content: "1"; } #s2 > h2::before { content: "2"; } #s3 > h2::before { content: "3"; }
+
 
 /* ---- controles: alvo de toque de 44 px em todos */
 button, .btn, input[type=text], input[type=number], select, textarea { font: inherit; color: inherit; }
@@ -532,4 +530,14 @@ details.alerts[open] > summary svg:last-child { transform: rotate(180deg); }
 @media (max-width: 760px) {
   .map-toggle { display: inline-flex; }
   .s3-map:not(.shown) #map, .s3-map:not(.shown) .map-legend, .s3-map:not(.shown) #legend, .s3-map:not(.shown) .map-expand, .s3-map:not(.shown) .map-pan { display: none; }
+}
+
+/* ---- melhorias do dia */
+.ord { display: inline-grid; place-items: center; min-width: 1.8rem; height: 1.45rem; padding: 0 .3rem; border-radius: 5px; background: var(--rc, var(--ink)); color: #fff; font: 700 .9375rem/1 var(--font-head); box-shadow: inset 0 0 0 1.5px rgb(255 255 255 / .9); }
+#copy-next .swatch.mini, #copy-next-fab .swatch.mini { margin-right: .1rem; }
+#zmap.drawing::after { content: ""; position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; border: 2px solid #0f766e; border-radius: 50%; background: radial-gradient(#0f766e 2px, transparent 3px); z-index: 900; pointer-events: none; }
+/* celular: a fila de envio vem logo depois do título do resultado, antes do resumo */
+@media (max-width: 760px) {
+  #s3 { display: flex; flex-direction: column; }
+  #s3 > h2 { order: -3; } #s3 > .sendbar { order: -2; }
 }
