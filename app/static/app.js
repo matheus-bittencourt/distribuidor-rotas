@@ -70,13 +70,18 @@ function flash(btn, text, ms = 1800) {
   btn.textContent = text; clearTimeout(btn._t);
   btn._t = setTimeout(() => btn.replaceChildren(...btn._orig.map((n) => n.cloneNode(true))), ms);
 }
-// Confirmação em duas etapas, no próprio botão (sem alert/confirm nativos). Sem prazo: fica armado até
-// a pessoa confirmar, sair do botão ou apertar Esc; o estado é anunciado para leitores de tela.
-function twoStep(btn, armedText, action, armedHint = "Clique de novo para confirmar, ou Esc para cancelar.") {
-  const disarm = () => { if (!btn.classList.contains("armed")) return; btn.classList.remove("armed"); btn.textContent = btn.dataset.label; };
+// Confirmação em duas etapas, no próprio botão (sem alert/confirm nativos). O 2º toque só vale depois de 0,6 s
+// (dois toques seguidos não confirmam) e o botão volta ao normal sozinho em 6 s; também desarma ao sair do botão
+// ou com Esc. O estado é anunciado para leitores de tela.
+function twoStep(btn, armedText, action, armedHint = "Clique de novo para confirmar (vale por 6 segundos), ou Esc para cancelar.") {
+  const disarm = () => { clearTimeout(btn._t); if (!btn.classList.contains("armed")) return; btn.classList.remove("armed"); btn.textContent = btn.dataset.label; };
   btn.addEventListener("click", () => {
-    if (btn.classList.contains("armed")) { disarm(); return action(); }
+    if (btn.classList.contains("armed")) {
+      if (Date.now() - btn._armedAt < 600) return;
+      disarm(); return action();
+    }
     btn.dataset.label = btn.textContent; btn.textContent = armedText; btn.classList.add("armed");
+    btn._armedAt = Date.now(); btn._t = setTimeout(disarm, 6000);
     announce(`${armedText}. ${armedHint}`);
   });
   btn.addEventListener("blur", () => setTimeout(disarm, 150));
@@ -168,6 +173,12 @@ async function init() {
     $("regeo").disabled = true;
     try { await post(`/api/jobs/${state.job}/regeocode`, {}); await refresh(); } finally { $("regeo").disabled = false; }
   });
+  $("copy-fallback").addEventListener("close", (e) => {
+    const dlg = e.target, fn = dlg._onPasted; dlg._onPasted = null;
+    if (dlg.returnValue === "done" && fn) fn();
+    dlg.returnValue = "";
+  });
+  fabInit();
   const drop = $("drop");
   $("file").addEventListener("change", (e) => { const fs = [...e.target.files]; e.target.value = ""; if (fs.length) upload(fs); });
   ["dragover", "dragenter"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("over"); }));
@@ -636,7 +647,12 @@ function updatePlan() {
     : `${stops} para ${d.length} entregador${d.length > 1 ? "es" : ""} · ${preset ? preset.label.toLowerCase() : `igualando ${BY_LABEL[by]} (${pct(b)})`} · ${tol} min de folga por entrega.`
       + (idle ? ` Mais entregadores que entregas: ${idle} ficaria${idle > 1 ? "m" : ""} sem rota.` : "");
   $("plan").classList.toggle("warn", !!idle);
-  $("solve").disabled = !d.length || !state.okCount || $("solve").dataset.busy === "1";
+  const bad = typeof zonesIncomplete === "function" ? zonesIncomplete() : [];
+  if (bad.length) {
+    $("plan").textContent = `A zona "${bad[0]}" ainda não tem entregador${bad.length > 1 ? ` (e mais ${bad.length - 1})` : ""}: escolha quem atende nela ou remova a zona.`;
+    $("plan").classList.add("warn");
+  }
+  $("solve").disabled = !d.length || !state.okCount || bad.length > 0 || $("solve").dataset.busy === "1";
   if (!$("solve").classList.contains("armed")) $("solve").textContent = state.result ? "Recalcular rotas" : "Calcular rotas";
 }
 function addMe() {
@@ -659,16 +675,17 @@ async function awaitResult() {
 }
 
 // Recalcular troca as rotas: as marcações de "copiado" deixam de valer. Se já houver envios, pede confirmação.
-function disarmSolve() { const b = $("solve"); if (b.classList.contains("armed")) { b.classList.remove("armed"); updatePlan(); } }
+function disarmSolve() { const b = $("solve"); clearTimeout(b._t); if (b.classList.contains("armed")) { b.classList.remove("armed"); updatePlan(); } }
 function solveClick() {
   const b = $("solve"), n = state.sent.filter((s) => s.rota || s.links).length;
   if (state.result && n && !b.classList.contains("armed")) {
-    b.classList.add("armed");
-    b.textContent = `Recalcular? Apaga ${n} marcaç${n > 1 ? "ões" : "ão"}`;
-    announce(`${b.textContent} As rotas mudam e as marcações de copiado são apagadas. Clique de novo para confirmar, ou Esc para cancelar.`);
+    b.classList.add("armed"); b._armedAt = Date.now(); b._t = setTimeout(disarmSolve, 8000);
+    b.textContent = `Recalcular? ${n} já ${n > 1 ? "receberam" : "recebeu"} a rota atual`;
+    announce(`${b.textContent}. Recalcular troca as rotas: o que já foi enviado deixa de valer e as marcações de envio são apagadas. Clique de novo para confirmar (vale por 8 segundos), ou Esc para cancelar.`);
     return;
   }
-  b.classList.remove("armed");
+  if (b.classList.contains("armed") && Date.now() - (b._armedAt || 0) < 600) return;
+  clearTimeout(b._t); b.classList.remove("armed");
   clearSent();
   solve();
 }
@@ -732,12 +749,15 @@ function linksText(d) {
 }
 
 // ---- cópia com estado persistente: o ✓ fica até recalcular, para o operador saber o que já mandou
-async function copyText(text, what = "Texto copiado") {
+async function copyText(text, what = "Texto copiado", onPasted = null) {
   try { await navigator.clipboard.writeText(text); announce(what); return true; }
-  catch { showCopyFallback(text); return false; }
+  catch { showCopyFallback(text, onPasted); return false; }
 }
-function showCopyFallback(text) {
+// Sem acesso à área de transferência (ex.: o app aberto por IP na rede), o texto vai para um diálogo. "Já colei e
+// enviei" marca como enviado, como se a cópia tivesse funcionado; fechar de outro jeito não marca nada.
+function showCopyFallback(text, onPasted) {
   const dlg = $("copy-fallback"), ta = $("copy-fallback-text");
+  dlg._onPasted = onPasted || null; $("cf-done").hidden = !onPasted;
   ta.value = text; dlg.showModal(); ta.focus(); ta.select();
 }
 function markCopied(btn, label) {
@@ -752,6 +772,8 @@ function unmarkCopied(btn, label, ico = "copy") {
 function refreshSent(i) {
   const row = document.querySelector(`.driver[data-i="${i}"]`); if (!row) return;
   const st = state.sent[i], chip = row.querySelector(".chip.sent"), wa = !!state.phones?.[state.result.drivers[i].label];
+  const ms = row.querySelector(".mark-sent");
+  if (ms) ms.replaceChildren(icon("check"), st.rota && st.links ? " Desmarcar envio" : " Marcar como enviado, sem copiar");
   st.rota ? markCopied(row.querySelector(".copy-rota"), wa ? "Rota aberta" : "Rota copiada")
     : unmarkCopied(row.querySelector(".copy-rota"), wa ? "WhatsApp: rota" : "Copiar rota", wa ? "chat" : "copy");
   st.links ? markCopied(row.querySelector(".copy-links"), wa ? "Links abertos" : "Links copiados")
@@ -791,21 +813,36 @@ function undoLastCopy() {
 }
 // Com telefone: abre a conversa do entregador no WhatsApp já com a mensagem (e copia também, caso o
 // WhatsApp corte um texto longo). Sem telefone: só copia, para colar.
+function markSent(i, kind) {
+  state.sentOneByOne = true;
+  state.sent[i][kind] = true; refreshSent(i); updateSendbar(); saveSent(); showLastCopy(i, kind);
+}
+// Marca (ou desmarca) rota e links de um entregador como enviados sem copiar nada: para quem já mandou por outro
+// meio, ou para pular quem não responde sem travar a fila.
+function toggleSent(i) {
+  const st = state.sent[i], was = st.rota && st.links, who = state.result.drivers[i].label;
+  st.rota = st.links = !was; state.lastCopy = null;
+  refreshSent(i); updateSendbar(); saveSent();
+  $("sent-last").textContent = was ? `Envio de ${who} desmarcado: volta para a fila.` : `${who} marcado como enviado, sem copiar.`;
+  announce($("sent-last").textContent);
+}
 async function copyKind(i, kind) {
   const [what, done] = KIND[kind], who = state.result.drivers[i].label, phone = state.phones?.[who], text = state.texts[i][kind];
   if (phone) {
     window.open(waUrl(phone, text), "_blank", "noopener");   // dentro do clique: o navegador não bloqueia
     try { await navigator.clipboard.writeText(text); } catch {}
     announce(`${what} de ${who} aberta no WhatsApp`);
-  } else if (!(await copyText(text, `${what} de ${who} ${done}`))) return;
-  state.sentOneByOne = true;
-  state.sent[i][kind] = true; refreshSent(i); updateSendbar(); saveSent(); showLastCopy(i, kind);
+  } else if (!(await copyText(text, `${what} de ${who} ${done}`, () => markSent(i, kind)))) return;
+  markSent(i, kind);
 }
 // "Copiar todas" serve para mandar tudo de uma vez (ex.: num grupo). Marca todos, mas dá para desfazer:
 // se o texto não chegou a ser colado, as marcações voltam como estavam.
 async function copyAll(kind, btn, doneLabel) {
   $("bulk").open = false;
-  if (!(await copyText(state.texts.map((t) => t[kind]).join(SEP), doneLabel))) return;
+  if (!(await copyText(state.texts.map((t) => t[kind]).join(SEP), doneLabel, () => applyCopyAll(kind, btn, doneLabel)))) return;
+  applyCopyAll(kind, btn, doneLabel);
+}
+function applyCopyAll(kind, btn, doneLabel) {
   const before = state.sent.map((st) => st[kind]);
   state.sent.forEach((st, i) => { st[kind] = true; refreshSent(i); });
   markCopied(btn, doneLabel); updateSendbar(); saveSent();
@@ -914,6 +951,9 @@ function renderResult(r) {
     `tempos com ${Math.round((r.tolerance_seconds ?? 0) / 60)} min de folga por entrega`,
     `${pct(r.zone_purity)} das paradas ficam na zona principal do entregador`,
   ];
+  const outside = n - eq.length, zoneRoutes = dr.filter((d) => d.group).length;
+  const outsideDriver = (d) => !!d.group || d.mode === "pe";
+  const plate = (d) => { const k = dr.indexOf(d); return el("span", { class: "swatch mini", style: `background:${color(k)}`, title: d.label }, String(k + 1)); };
   const multi = all.filter((s) => s.n_deliveries > 1).length;
   if (multi) notes.push(`${multi} paradas reúnem várias entregas no mesmo endereço (casa ou condomínio)`);
   if (zones.length) notes.push(`${zones.length} zona${zones.length > 1 ? "s" : ""} desenhada${zones.length > 1 ? "s" : ""}: cada uma é dividida só entre os entregadores dela`);
@@ -922,25 +962,32 @@ function renderResult(r) {
   const fmtRange = (a, f) => !a.length ? "–" : (Math.min(...a) === Math.max(...a) ? f(a[0]) : `${f(Math.min(...a))}–${f(Math.max(...a))}`);
   const reviewBtn = el("button", { class: "link", onclick: () => $("review-card").scrollIntoView({ behavior: "smooth", block: "start" }) }, "Revisar endereços");
   $("summary").replaceChildren(
-    el("p", { class: "headline" }, `${n} rota${n > 1 ? "s" : ""} pront${n > 1 ? "as" : "a"} · ${r.deliveries} entregas em ${total} paradas`),
+    el("p", { class: "headline" }, `${n} rota${n > 1 ? "s" : ""} pront${n > 1 ? "as" : "a"}`
+      + (outside ? ` (${[`${eq.length} livre${eq.length === 1 ? "" : "s"}`, ...(zoneRoutes ? [`${zoneRoutes} de zona`] : []), ...(walker ? ["1 a pé"] : [])].join(" + ")})` : "")
+      + ` · ${r.deliveries} entregas em ${total} paradas`),
     el("dl", { class: "ranges" },
       el("div", {}, el("dt", {}, "Entregas"), el("dd", {}, range(eq.map((d) => d.deliveries)))),
       el("div", {}, el("dt", {}, "Tempo"), el("dd", {}, fmtRange(times, fmtMin))),
       el("div", {}, el("dt", {}, "Km"), el("dd", {}, `${fmtRange(kms, Math.round)} km`)),
       el("div", {}, el("dt", {}, "Paradas"), el("dd", {}, range(counts))),
     ),
-    ...(walker ? [el("p", { class: "walker-line" }, `${walker.label}: ${walker.deliveries} entrega${walker.deliveries === 1 ? "" : "s"} em ${walker.count} parada${walker.count === 1 ? "" : "s"} · ~${fmtMin(walker.total_min)} · ~${Math.round(walker.km)} km, a pé. Fica fora do equilíbrio das motos.`)] : []),
-    ...(r.pedestrian?.warning ? [el("p", { class: "alert-line" }, icon("alert"), " ", r.pedestrian.warning)] : []),
-    ...zones.map((z) => {
-      const ds = dr.filter((d) => d.group === z.name);
-      const line = `${z.name}: ${z.deliveries} entrega${z.deliveries === 1 ? "" : "s"} · ${ds.length} entregador${ds.length === 1 ? "" : "es"} (${z.profile === "pe" ? "a pé" : "moto"}) · ${fmtRange(ds.map((d) => d.total_min), fmtMin)}`
-        + (z.near_border ? ` · ${z.near_border} parada${z.near_border === 1 ? "" : "s"} a até 80 m do contorno (dentro ou fora): confira se estão do lado certo` : "") + ". Fora do equilíbrio dos livres.";
-      return el("p", { class: "walker-line", style: `border-left-color:${zcolor(zones.indexOf(z))}` }, line);
-    }),
-    ...zones.filter((z) => z.warning).map((z) => el("p", { class: "alert-line" }, icon("alert"), ` ${z.name}: ${z.warning}`)),
-    ...(r.zone_warnings || []).map((w) => el("p", { class: "alert-line" }, icon("alert"), ` ${w}`)),
+    ...(outside ? [el("p", { class: "ranges-cap" }, `Faixas e veredito: só as ${eq.length} rotas livres. O que está fora do equilíbrio aparece abaixo.`)] : []),
+    ...(outside ? [el("ul", { class: "outside" },
+      ...zones.map((z) => {
+        const ds = dr.filter((d) => d.group === z.name);
+        return el("li", {}, el("span", { class: "plates" }, ...ds.map(plate)),
+          el("span", {}, el("strong", {}, z.name), ` · ${z.deliveries} entrega${z.deliveries === 1 ? "" : "s"} · ${z.profile === "pe" ? "a pé" : "moto"} · ${fmtRange(ds.map((d) => d.total_min), fmtMin)} por entregador`,
+            z.near_border ? ` · ${z.near_border} parada${z.near_border === 1 ? "" : "s"} a até 80 m do contorno (dentro ou fora): confira o lado` : ""));
+      }),
+      ...(walker ? [el("li", {}, el("span", { class: "plates" }, plate(walker)),
+        el("span", {}, el("strong", {}, walker.label), ` · ${walker.deliveries} entrega${walker.deliveries === 1 ? "" : "s"} em ${walker.count} parada${walker.count === 1 ? "" : "s"} · a pé · ~${fmtMin(walker.total_min)} · ~${Math.round(walker.km)} km`))] : []))] : []),
+    ...(() => {
+      const alerts = [...(r.pedestrian?.warning ? [r.pedestrian.warning] : []), ...zones.filter((z) => z.warning).map((z) => `${z.name}: ${z.warning}`), ...(r.zone_warnings || [])];
+      if (alerts.length > 1) return [el("details", { class: "alerts" }, el("summary", {}, icon("alert"), ` ${alerts.length} avisos sobre as zonas`, icon("chevron")), ...alerts.map((w) => el("p", { class: "alert-line" }, w)))];
+      return alerts.map((w) => el("p", { class: "alert-line" }, icon("alert"), " ", w));
+    })(),
     ...(eq.length > 1 ? [el("p", { class: `verdict ${verdictKind}` }, verdictKind === "ok" ? icon("check") : icon("alert"), " ",
-      `Rotas ${verdictWord}` + (kmOut ? `, mas o km passou da margem de ±${Math.round(kt * 100)}%` : "") +
+      `Rotas ${outside ? "livres " : ""}${verdictWord}` + (kmOut ? `, mas o km passou da margem de ±${Math.round(kt * 100)}%` : "") +
       `. Diferença entre a menor e a maior: entregas ${spreads.entregas}% · tempo ${spreads.tempo}% · km ${spreads.km}%.`)] : []),
     ...(eq.length > 1 && worst > 15 ? [outliers(eq, spreads, kt, usedPreset)] : []),
     ...(r.unrouted.length ? [el("p", { class: "alert-line" }, icon("alert"), " ",
@@ -981,6 +1028,7 @@ function renderResult(r) {
       el("summary", { "aria-label": `Mais ações de ${d.label}` }, "Mais", icon("chevron")),
       el("div", { class: "menu" },
         el("button", { onclick: () => { more.open = false; printSheets([d], `Rota ${d.label}`); } }, icon("print"), " Imprimir lista completa"),
+        el("button", { class: "mark-sent", onclick: () => { more.open = false; toggleSent(i); } }, icon("check"), " Marcar como enviado, sem copiar"),
         el("a", { href: d.links[0].url, target: "_blank", rel: "noopener", onclick: () => (more.open = false) }, icon("map"), " Abrir trecho 1 no Maps (nova aba)"),
         ...(r.has_pages ? [el("a", { href: `/api/jobs/${state.job}/paginas.pdf?driver=${d.index}`, target: "_blank", rel: "noopener", onclick: () => (more.open = false) },
           icon("print"), " Intimações desta rota (PDF, nova aba)")] : []),
@@ -988,19 +1036,19 @@ function renderResult(r) {
     const zoneTxt = d.group ? d.group : d.zones[0] ? `${d.zones[0].name}${d.zones.length > 1 ? ` +${d.zones.length - 1}` : ""}` : "sem paradas";
     const head = el("div", { class: "dhead" },
       el("span", { class: "swatch", style: `background:${color(i)}` }, String(i + 1)),
-      el("div", { class: "dname" }, el("h3", { class: "dtitle" }, toggle), el("span", { class: "zone" }, zoneTxt, el("span", { class: "chip sent", hidden: "" }, icon("check"), " copiado"))),
+      el("div", { class: "dname" }, el("h3", { class: "dtitle" }, toggle), el("span", { class: "zone" }, zoneTxt, el("span", { class: "chip sent", hidden: "" }, icon("check"), " enviado"))),
       el("div", { class: "dnums" }, el("span", {}, `${d.count} paradas · ${d.deliveries} entregas`), el("span", {}, fmtMin(d.total_min)), el("span", {}, `${Math.round(d.km)} km`)),
-      el("div", { class: "bar", role: "img", "aria-label": `${d.label}: ${CRIT[by]} em relação à maior rota, ${Math.round((metric(d) / maxM) * 100)}%`, style: `--bar:${color(i)}` }, el("i", { style: `width:${Math.min(100, (metric(d) / maxM) * 100)}%` })),
+      el("div", { class: "bar" + (outsideDriver(d) ? " hatch" : ""), role: "img", "aria-label": `${d.label}: ${CRIT[by]} em relação à maior rota livre, ${Math.round((metric(d) / maxM) * 100)}%${outsideDriver(d) ? " (fora do equilíbrio das livres)" : ""}`, style: `--bar:${color(i)}` }, el("i", { style: `width:${Math.min(100, (metric(d) / maxM) * 100)}%` })),
       el("div", { class: "dact" }, copyRoute, copyLinks, more),
     );
-    const row = el("article", { class: "driver", "data-i": String(i), style: `--d:${i}` }, head, body);
+    const row = el("article", { class: "driver" + (outsideDriver(d) ? " outside" : ""), "data-i": String(i), style: `--d:${i}` }, head, body);
     head.addEventListener("mouseenter", () => highlight(i)); head.addEventListener("mouseleave", () => highlight(null));
     head.addEventListener("focusin", () => highlight(i)); head.addEventListener("focusout", () => highlight(null));
     box.append(row);
   });
   state.sent.forEach((_, i) => refreshSent(i));
   const resumedN = state.sent.filter((s) => s.rota || s.links).length;
-  $("sent-last").textContent = resumedN ? `Retomando de onde parou: ${resumedN} entregador${resumedN > 1 ? "es" : ""} já com mensagens copiadas.` : "";
+  $("sent-last").textContent = resumedN ? `Retomando de onde parou: ${resumedN} entregador${resumedN > 1 ? "es" : ""} já marcado${resumedN > 1 ? "s" : ""} como enviado${resumedN > 1 ? "s" : ""}.` : "";
   updateSendbar(); updatePlan();   // "Calcular rotas" vira "Recalcular rotas"
   // espera o layout assentar e a restauração de rolagem do navegador (no recarregamento o painel acabou de aparecer)
   setTimeout(() => $("s3").scrollIntoView({ behavior: "smooth", block: "start" }), 300);
@@ -1017,16 +1065,34 @@ function nextMessage() {
 function updateSendbar() {
   const n = state.sent.length, done = state.sent.filter((s) => s.rota && s.links).length, nx = nextMessage();
   const msgs = state.sent.reduce((a, s) => a + s.rota + s.links, 0);
-  $("sent-count").textContent = done === n ? `Rota e links de todos os ${n} entregadores copiados` : `${done} de ${n} entregadores com rota e links copiados`;
+  $("sent-count").textContent = done === n ? `Tudo enviado: rota e links dos ${n} entregadores` : `${done} de ${n} entregadores com rota e links enviados`;
+  $("sendbar").classList.toggle("all-done", n > 0 && done === n);
+  document.querySelector(".s3-end .hint").textContent = n > 0 && done === n
+    ? "Tudo enviado. Se quiser, apague a lista, os nomes e os endereços da memória deste computador."
+    : "Terminou de enviar? Apague a lista, os nomes e os endereços da memória deste computador.";
   if (n && done === n && state.sentOneByOne) markSeasoned();   // envio completo de verdade, não o "copiar todas"
   $("sent-meter").style.width = `${n ? (msgs / (2 * n)) * 100 : 0}%`;   // avança a cada mensagem, não só a cada entregador
   const btn = $("copy-next");
   btn.disabled = !nx;
   const who = nx && state.result.drivers[nx.i].label, wa = nx && state.phones?.[who];
   btn.querySelector("use").setAttribute("href", wa ? "#i-chat" : "#i-copy");
-  $("copy-next-label").textContent = !nx ? "Tudo copiado"
+  $("copy-next-label").textContent = !nx ? "Tudo enviado"
     : wa ? `Abrir WhatsApp de ${who}: ${nx.kind === "rota" ? "rota" : "links"}`
     : `Copiar ${nx.kind === "rota" ? "rota" : "links"} de ${who}`;
+  // no celular, a mesma ação fica fixa na base quando a fila sai da tela
+  $("fab-label").textContent = $("copy-next-label").textContent;
+  $("copy-next-fab").querySelector("use").setAttribute("href", !nx ? "#i-check" : wa ? "#i-chat" : "#i-copy");
+  $("copy-next-fab").disabled = !nx;
+  syncFab();
+}
+function syncFab() {
+  const on = !!state.result && !$("s3").hidden && state.barVisible === false;
+  $("fab").hidden = !on; document.body.classList.toggle("fab-on", on);
+}
+function fabInit() {
+  $("copy-next-fab").addEventListener("click", copyNext);
+  if (!("IntersectionObserver" in window)) return;
+  new IntersectionObserver(([e]) => { state.barVisible = e.isIntersecting; syncFab(); }).observe($("sendbar"));
 }
 // Telefones editados na lista de entregadores valem na hora para a fila (sem recalcular).
 function refreshPhones() {
@@ -1123,6 +1189,19 @@ function decodePolyline(s) {
   return out;
 }
 
+// No celular um dedo sobre o mapa faria pan e prenderia a rolagem da página: o arrastar fica desligado, com um botão
+// para ligar. O pinch (dois dedos) continua dando zoom e toques continuam valendo (desenhar zona, ver dica).
+function touchGuard(map, host) {
+  if (!L.Browser.mobile) return;
+  map.dragging.disable();
+  const b = el("button", { type: "button", class: "ghost map-pan", "aria-pressed": "false" }, "Mover o mapa com um dedo");
+  b.addEventListener("click", () => {
+    const on = b.getAttribute("aria-pressed") !== "true";
+    on ? map.dragging.enable() : map.dragging.disable();
+    b.setAttribute("aria-pressed", String(on)); b.textContent = on ? "Parar de mover o mapa" : "Mover o mapa com um dedo";
+  });
+  host.insertAdjacentElement("afterend", b);
+}
 // Fundo do mapa: o do pacote offline; sem ele, o servidor do OSM (só fora do modo isolado).
 function addBasemap(map) {
   const attribution = '© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a>';
@@ -1136,7 +1215,13 @@ function addBasemap(map) {
 function drawMap(r) {
   if (!state.map) {
     state.map = L.map("map", { preferCanvas: true, maxZoom: 18 });
-    addBasemap(state.map);
+    addBasemap(state.map); touchGuard(state.map, $("map"));
+    $("map-toggle").addEventListener("click", () => {
+      const box = $("s3-map"), on = !box.classList.contains("shown");
+      box.classList.toggle("shown", on); $("map-toggle").setAttribute("aria-expanded", String(on));
+      $("map-toggle").textContent = on ? "Ocultar o mapa" : "Ver o mapa das rotas";
+      if (on) setTimeout(() => { state.map.invalidateSize(); if (state.allPts) state.map.fitBounds(state.allPts, { padding: [20, 20] }); }, 50);
+    });
   }
   state.routes.forEach((o) => o.layers.forEach((l) => l.remove())); state.routes = [];
   if (state.zoneLayer) { state.zoneLayer.remove(); state.zoneLayer = null; }

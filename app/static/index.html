@@ -270,6 +270,7 @@
     <div class="s3-body">
       <div id="drivers-out"></div>
       <aside class="s3-map" id="s3-map" aria-label="Mapa das rotas">
+        <button type="button" id="map-toggle" class="ghost map-toggle" aria-expanded="false">Ver o mapa das rotas</button>
         <button type="button" id="map-expand" class="map-expand" aria-pressed="false">Expandir mapa</button>
         <div id="map" role="region" aria-label="Mapa com as rotas coloridas"></div>
         <div class="map-legend" id="map-legend" role="group" aria-label="Destacar uma rota no mapa"></div>
@@ -295,12 +296,16 @@
   <label class="check small"><input type="checkbox" id="map-check"> Procurar atualização do mapa ao abrir</label>
 </footer>
 
+<div class="fab" id="fab" hidden>
+  <button type="button" class="primary" id="copy-next-fab"><svg class="i"><use href="#i-copy"/></svg> <span id="fab-label"></span></button>
+</div>
+
 <dialog id="copy-fallback" aria-labelledby="copy-fallback-title">
   <form method="dialog">
     <h2 id="copy-fallback-title">Copie manualmente</h2>
-    <p class="hint" id="copy-fallback-hint">O navegador bloqueou a cópia automática. O texto está selecionado: use Ctrl+C.</p>
+    <p class="hint" id="copy-fallback-hint">O navegador bloqueou a cópia automática. O texto está selecionado: use Ctrl+C, cole na conversa e envie. Depois toque em "Já colei e enviei" para marcar.</p>
     <textarea id="copy-fallback-text" readonly rows="12" aria-labelledby="copy-fallback-title" aria-describedby="copy-fallback-hint"></textarea>
-    <div class="actions"><button class="primary" value="close">Fechar</button></div>
+    <div class="actions"><button class="primary" id="cf-done" value="done">Já colei e enviei</button><button class="ghost" value="close">Fechar sem marcar</button></div>
   </form>
 </dialog>
 <p id="live" class="sr" aria-live="polite"></p>
