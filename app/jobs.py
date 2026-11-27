@@ -34,6 +34,9 @@ class Job:
     # PDFs de intimações: os originais ficam na memória enquanto o job existe (por posição no envio), para
     # montar o PDF de cada entregador com as páginas das entregas dele. Somem junto com o job.
     sources: dict[int, bytes] = field(default_factory=dict)
+    # Mover parada entre entregadores (criado a cada cálculo, com o contexto dele): função e a prévia pendente.
+    mover: object | None = None
+    pending_move: dict | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 

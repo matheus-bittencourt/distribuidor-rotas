@@ -17,8 +17,13 @@ class Stop:
     reason: str = ""        # motivo quando status == revisar
     zone: str = ""
     pages: list[int] = field(default_factory=list)  # páginas desta entrega no PDF original (intimações)
+    src_query: str = ""     # consulta como veio da lista (a chave da memória de endereços corrigidos)
     src: int = 0            # de qual arquivo enviado veio (posição na lista de envio)
     file: str = ""          # nome desse arquivo
+
+    def __post_init__(self):
+        if not self.src_query:
+            self.src_query = self.query
 
     def public(self) -> dict:
         return {

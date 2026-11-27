@@ -32,8 +32,8 @@
   </div>
   <ol class="steps" id="steps" aria-label="Etapas">
     <li class="current" data-step="1"><a href="#s1"><span>1</span> Lista</a></li>
-    <li data-step="2"><a href="#s2" aria-disabled="true" tabindex="-1"><span>2</span> Entregadores</a></li>
-    <li data-step="3"><a href="#s3" aria-disabled="true" tabindex="-1"><span>3</span> Rotas</a></li>
+    <li data-step="2"><a href="#s2" aria-disabled="true"><span>2</span> Entregadores</a></li>
+    <li data-step="3"><a href="#s3" aria-disabled="true"><span>3</span> Rotas</a></li>
   </ol>
   <button id="wipe" class="ghost danger" hidden>Apagar dados da sessão</button>
 </div>
@@ -88,7 +88,7 @@
 <div class="col">
   <section class="panel" id="s1">
     <h2>Lista do dia</h2>
-    <p class="lede">Guardo só nome, endereço e código de rastreio. CPF, valores, telefone e protocolo são descartados neste computador.</p>
+    <p class="lede">O app guarda só nome, endereço e código de rastreio. CPF, valores, telefone e protocolo são descartados neste computador.</p>
     <label class="drop" id="drop">
       <input type="file" id="file" class="vh" accept=".xlsx,.xlsm,.csv,.txt,.pdf" multiple>
       <strong>Escolha ou arraste os arquivos</strong>
@@ -97,11 +97,17 @@
     <div id="s1status" class="status" role="status" hidden></div>
     <div id="s1report" hidden></div>
     <p id="s1ai" class="hint"></p>
+    <details class="how" id="addr-memory">
+      <summary><svg class="i"><use href="#i-info"/></svg> Lembrar endereços que eu corrigir <span id="mem-summary" class="muted"></span></summary>
+      <label class="check"><input type="checkbox" id="mem-on"> Lembrar neste computador os endereços que eu corrigir na revisão</label>
+      <p class="hint">Guarda só o texto do endereço e a posição, em <code>data/enderecos.json</code> (nenhum nome, CPF, telefone ou código). Nos próximos dias, o mesmo endereço sai localizado sozinho. Fica salvo mesmo depois de "Apagar dados da sessão"; desligado, nada é gravado.</p>
+      <div class="actions tight"><button type="button" class="ghost danger" id="mem-forget">Esquecer os endereços lembrados</button></div>
+    </details>
   </section>
 
   <section class="panel" id="map-card" hidden>
     <h2>Indique as colunas</h2>
-    <p class="lede">Não reconheci as colunas deste arquivo. Escolha onde estão o endereço (obrigatório), o nome e o código. Colunas sensíveis ficam bloqueadas.</p>
+    <p class="lede">As colunas deste arquivo não foram reconhecidas. Escolha onde estão o endereço (obrigatório), o nome e o código. Colunas sensíveis ficam bloqueadas.</p>
     <p id="map-file" class="hint" hidden></p>
     <div id="map-table" class="maptable"></div>
     <div class="grid3" id="map-main"></div>
@@ -140,7 +146,8 @@
 
     <div class="field" id="ped-field">
       <label class="check"><input type="checkbox" id="ped-on" checked> Um entregador a pé no Centro</label>
-      <span class="hint">Todas as entregas dentro da zona do Centro Histórico (o contorno aparece no mapa depois de calcular) vão para ele. Ele sai e volta ao mesmo ponto, com rota de pedestre, soma aos entregadores abaixo e fica fora do equilíbrio de carga. As demais rotas são de moto.</span>
+      <span class="hint">As entregas da zona do Centro Histórico vão todas para ele, a pé.</span>
+      <details class="why"><summary>Como funciona</summary><p class="hint">O contorno da zona aparece no mapa depois de calcular. Ele sai e volta ao mesmo ponto, com rota de pedestre, soma aos entregadores abaixo e fica fora do equilíbrio de carga. As demais rotas são de moto.</p></details>
       <label class="sub" for="ped-start">Ponto de saída e chegada dele (opcional)</label>
       <input id="ped-start" type="text" autocomplete="off" placeholder="Padrão: Praça da Alfândega">
     </div>
@@ -167,6 +174,7 @@
           <button id="z-view" class="ghost" type="button">Atalho: retângulo da tela</button>
           <button id="z-finish" class="primary" type="button" hidden>Concluir zona</button>
           <button id="z-undo" class="ghost" type="button" hidden>Desfazer ponto</button>
+          <button id="z-center" class="ghost" type="button" hidden>Adicionar ponto no centro do mapa</button>
           <button id="z-cancel" class="ghost" type="button" hidden>Cancelar</button>
         </div>
         <p id="z-help" class="hint" role="status"></p>
@@ -188,6 +196,15 @@
           <label for="tolerance">Folga por entrega (min)</label>
           <input id="tolerance" type="number" min="0" max="30" step="1" value="1">
           <span class="hint">Somada ao tempo parado de cada entrega, também nas paradas com várias.</span>
+        </div>
+        <div class="field">
+          <label for="traffic">Trânsito esperado</label>
+          <select id="traffic">
+            <option value="1">Sem trânsito (rua livre)</option>
+            <option value="1.2">Moderado (tempos de deslocamento +20%)</option>
+            <option value="1.4">Pico (tempos de deslocamento +40%)</option>
+          </select>
+          <span class="hint">O mapa não conhece o trânsito do dia. Aumenta só o tempo de deslocamento das motos, para os horários de chegada refletirem a hora da saída. As paradas e os km não mudam.</span>
         </div>
         <div class="custom" id="custom">
         <div class="field">
@@ -244,13 +261,14 @@
         <p class="sent-last" id="sent-last" role="status"></p>
       </div>
       <div class="sendbar-actions">
-        <button id="copy-next" class="primary"><svg class="i"><use href="#i-copy"/></svg> <span id="copy-next-label">Copiar próxima mensagem</span></button>
+        <button id="copy-next" class="primary"><svg class="i"><use href="#i-copy"/></svg> <span class="swatch mini" id="next-plate" hidden></span><span id="copy-next-label">Copiar próxima mensagem</span></button>
         <details class="more" id="bulk">
           <summary>Todas as rotas <svg class="i"><use href="#i-chevron"/></svg></summary>
           <div class="menu">
             <button id="copy-all-routes"><svg class="i"><use href="#i-copy"/></svg> Copiar todas as rotas</button>
             <button id="copy-all-links"><svg class="i"><use href="#i-copy"/></svg> Copiar todos os links</button>
             <button id="print-all"><svg class="i"><use href="#i-print"/></svg> Imprimir todas</button>
+            <button id="print-summary"><svg class="i"><use href="#i-print"/></svg> Imprimir resumo do dia</button>
             <a id="pdf-all" href="#" target="_blank" rel="noopener" hidden><svg class="i"><use href="#i-print"/></svg> Intimações de todas as rotas (PDF, nova aba)</a>
             <a id="csv-all" href="#"><svg class="i"><use href="#i-download"/></svg> CSV de todas as rotas</a>
           </div>
@@ -297,8 +315,19 @@
 </footer>
 
 <div class="fab" id="fab" hidden>
-  <button type="button" class="primary" id="copy-next-fab"><svg class="i"><use href="#i-copy"/></svg> <span id="fab-label"></span></button>
+  <button type="button" class="primary" id="copy-next-fab"><svg class="i"><use href="#i-copy"/></svg> <span class="swatch mini" id="next-plate-fab" hidden></span><span id="fab-label"></span></button>
 </div>
+
+<dialog id="move-dialog" aria-labelledby="move-title">
+  <form method="dialog">
+    <h2 id="move-title">Mover parada</h2>
+    <p class="hint" id="move-lede"></p>
+    <table class="move-table" id="move-table"></table>
+    <p class="hint" id="move-balance"></p>
+    <p class="hint warnline" id="move-warn" hidden></p>
+    <div class="actions"><button class="primary" id="move-go" value="go">Mover</button><button class="ghost" value="cancel">Cancelar</button></div>
+  </form>
+</dialog>
 
 <dialog id="copy-fallback" aria-labelledby="copy-fallback-title">
   <form method="dialog">

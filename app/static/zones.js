@@ -88,10 +88,10 @@ function zDrawPolygons() {
 // ---- desenhar
 function zSetMode(drawing) {
   ["z-new", "z-view"].forEach((id) => show(id, !drawing));
-  ["z-finish", "z-undo", "z-cancel"].forEach((id) => show(id, drawing));
+  ["z-finish", "z-undo", "z-center", "z-cancel"].forEach((id) => show(id, drawing));
   $("zmap").classList.toggle("drawing", drawing);
   $("z-help").textContent = drawing
-    ? "Clique no mapa para marcar os cantos da zona (no mínimo 3). Clique no primeiro ponto ou em Concluir para fechar."
+    ? "Clique no mapa para marcar os cantos da zona (no mínimo 3). Clique no primeiro ponto ou em Concluir para fechar. Só com o teclado: mova o mapa com as setas e use \"Adicionar ponto no centro do mapa\" (o círculo marca o centro)."
     : (Z.list.length ? "" : "Nenhuma zona ainda. Sem zonas, todos os entregadores dividem tudo, como sempre.");
 }
 function zDraftDraw() {
@@ -104,15 +104,17 @@ function zStartDraw() {
   zEnsureMap(); Z.draft = { pts: [], layers: [] }; zSetMode(true);
 }
 function zCancelDraw() { if (Z.draft) { Z.draft.layers.forEach((l) => l.remove()); Z.draft = null; } zSetMode(false); }
-function zMapClick(e) {
+function zAddPoint(latlng) {
   if (!Z.draft) return;
-  const p = [+e.latlng.lat.toFixed(6), +e.latlng.lng.toFixed(6)], d = Z.draft;
+  const p = [+latlng.lat.toFixed(6), +latlng.lng.toFixed(6)], d = Z.draft;
   if (d.pts.length >= 3) {
-    const a = Z.map.latLngToContainerPoint(d.pts[0]), b = Z.map.latLngToContainerPoint(e.latlng);
+    const a = Z.map.latLngToContainerPoint(d.pts[0]), b = Z.map.latLngToContainerPoint(latlng);
     if (Math.hypot(a.x - b.x, a.y - b.y) < 14) return zFinishDraw();
   }
   d.pts.push(p); zDraftDraw();
+  announce(`Ponto ${d.pts.length} marcado`);
 }
+function zMapClick(e) { zAddPoint(e.latlng); }
 function zFinishDraw() {
   const d = Z.draft;
   if (!d || d.pts.length < 3) { $("z-help").textContent = "Marque pelo menos 3 pontos para fechar a zona."; return; }
@@ -274,6 +276,7 @@ async function zonesInit() {
   $("z-new").addEventListener("click", zStartDraw);
   $("z-view").addEventListener("click", zFromView);
   $("z-finish").addEventListener("click", zFinishDraw);
+  $("z-center").addEventListener("click", () => zAddPoint(Z.map.getCenter()));
   $("z-cancel").addEventListener("click", zCancelDraw);
   $("z-undo").addEventListener("click", () => { if (Z.draft && Z.draft.pts.length) { Z.draft.pts.pop(); zDraftDraw(); } });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && Z.draft) zCancelDraw(); });

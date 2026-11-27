@@ -15,6 +15,7 @@ from typing import Callable
 
 import httpx
 
+from . import addrmemory
 from .config import POA_BBOX, RMPA_BBOX, SETTINGS
 from .models import Stop
 from .sanitize import strip_accents
@@ -175,6 +176,17 @@ def geocode_stops(stops: list[Stop], progress: Callable[[int, int], None] = lamb
     """Preenche lat/lon/status das paradas 'pendente' (e 'revisar' se retry). Consultas iguais rodam uma vez."""
     geocoder = geocoder or make_geocoder()
     pending = [s for s in stops if s.status == "pendente" or (retry and s.status == "revisar")]
+    remembered = 0
+    if addrmemory.enabled():     # endereços que o operador já corrigiu em outro dia (opcional)
+        rest = []
+        for s in pending:
+            hit = addrmemory.get(s.query)
+            if hit and in_region(*hit):
+                s.lat, s.lon, s.status, s.precision, s.reason = hit[0], hit[1], "ok", "manual", ""
+                remembered += 1
+            else:
+                rest.append(s)
+        pending = rest
     unique: dict[str, Geo | None | Exception] = {}
     queries = list(dict.fromkeys(s.query for s in pending))
     done = 0
@@ -209,3 +221,4 @@ def geocode_stops(stops: list[Stop], progress: Callable[[int, int], None] = lamb
             s.lat, s.lon, s.precision = res.lat, res.lon, res.precision
             if res.precision == "aproximado":
                 s.reason = "posição aproximada (rua, sem o número)"
+    return remembered

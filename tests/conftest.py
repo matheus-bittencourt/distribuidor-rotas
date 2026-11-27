@@ -27,3 +27,11 @@ def _isolated_zones(tmp_path, monkeypatch):
     from app import zonestore
 
     monkeypatch.setattr(zonestore, "PATH", tmp_path / "zonas.json")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_address_memory(tmp_path, monkeypatch):
+    """Cada teste usa a sua memória de endereços (nunca o data/enderecos.json de verdade)."""
+    from app import addrmemory
+
+    monkeypatch.setattr(addrmemory, "PATH", tmp_path / "enderecos.json")
