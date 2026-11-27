@@ -993,7 +993,7 @@ function renderResult(r) {
       el("div", { class: "bar", role: "img", "aria-label": `${d.label}: ${CRIT[by]} em relação à maior rota, ${Math.round((metric(d) / maxM) * 100)}%`, style: `--bar:${color(i)}` }, el("i", { style: `width:${Math.min(100, (metric(d) / maxM) * 100)}%` })),
       el("div", { class: "dact" }, copyRoute, copyLinks, more),
     );
-    const row = el("article", { class: "driver", "data-i": String(i) }, head, body);
+    const row = el("article", { class: "driver", "data-i": String(i), style: `--d:${i}` }, head, body);
     head.addEventListener("mouseenter", () => highlight(i)); head.addEventListener("mouseleave", () => highlight(null));
     head.addEventListener("focusin", () => highlight(i)); head.addEventListener("focusout", () => highlight(null));
     box.append(row);
@@ -1156,7 +1156,7 @@ function drawMap(r) {
       .bindTooltip(`${d.label} · #${s.order}`).addTo(state.map));
     const layers = [line, ...dots];
     if (d.stops[0]) {
-      const pin = L.marker([d.stops[0].lat, d.stops[0].lon], { icon: L.divIcon({ className: "", html: `<div class="num-pin" style="background:${c}">${i + 1}</div>`, iconSize: [22, 22], iconAnchor: [11, 11] }) })
+      const pin = L.marker([d.stops[0].lat, d.stops[0].lon], { icon: L.divIcon({ className: "", html: `<div class="num-pin" style="background:${c}">${i + 1}</div>`, iconSize: [28, 22], iconAnchor: [14, 11] }) })
         .bindTooltip(`${d.label}: primeira parada`).addTo(state.map);
       layers.push(pin);
     }
