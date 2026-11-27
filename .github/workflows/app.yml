@@ -50,6 +50,12 @@ jobs:
           fi
           cp LEIA-ME.txt dist/DistribuidorRotas/
 
+      - name: Teste de fumaça do executável
+        # Abre o .exe de verdade (numa cópia, para não deixar rastros no que vai para o zip): confere que todo
+        # app/*.json está no pacote, que a interface sobe, que um cálculo com zona funciona e que as zonas
+        # são gravadas ao lado do executável. Pega falta de arquivo de dados, que os testes do código não veem.
+        run: python scripts/smoke_exe.py dist/DistribuidorRotas
+
       - name: Compactar
         shell: pwsh
         run: Compress-Archive -Path dist/DistribuidorRotas -DestinationPath DistribuidorRotas-windows.zip
