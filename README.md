@@ -194,6 +194,12 @@ Opcional. Em **Zonas por entregador** (etapa dos entregadores) dá para desenhar
 - **Faixa de borda (Avançado):** por zona, em metros (padrão 0). Como o endereço é a rua, uma entrega pode cair do outro lado da linha; o resumo mostra quantas paradas ficam a até 80 m do contorno para conferir.
 - **Tempo de cálculo:** cada zona roda o solver à parte (pequena: poucos segundos). Medido com 1400 entregas, 14 entregadores, uma zona de moto com 2 e uma a pé com 1: ~40 s, contra ~35 s sem zonas.
 
+## Aparência
+
+O visual segue a sinalização viária: faixa de asfalto no topo com as três etapas como uma linha de percurso, fundo de concreto e papel nos painéis. O **amarelo de placa** aparece só na ação principal de cada tela e na etapa atual; cada entregador tem uma **placa de linha** colorida (a mesma no quadro de rotas, na legenda e nos pinos do mapa). Números e títulos usam fonte condensada, como em placas e quadros de horários. A barra de carga de cada entregador cresce ao chegar o resultado (sem movimento se o sistema pedir menos animação).
+
+A fonte é a **Bahnschrift** (já vem no Windows); em outros sistemas cai para uma condensada do próprio aparelho (DIN Alternate, Roboto Condensed) e, na falta delas, para a fonte padrão: o layout não estoura em nenhum caso (testado a 360, 384 e 412 px). Nenhuma fonte é baixada da internet, então o app continua funcionando isolado no pen drive.
+
 ## Configuração (`.env`)
 
 | Variável | Padrão | Para quê |
