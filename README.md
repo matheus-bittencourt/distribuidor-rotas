@@ -60,6 +60,14 @@ set GEOCODER=fake                                      # coordenadas sintéticas
 .venv\Scripts\python -m pytest                         # 25 testes
 ```
 
+**Teste de fumaça do executável.** Depois de gerar o executável (`pyinstaller distribuidor.spec`), rode
+`.venv\Scripts\python scripts\smoke_exe.py dist\DistribuidorRotas`. Ele abre o `.exe` de verdade, numa cópia da
+pasta, e confere que todo `app/*.json` está no pacote, que a interface sobe, que um cálculo com zona funciona, que as
+zonas são gravadas em `data/` ao lado do executável e, se o pacote traz o mapa offline, que endereços reais são
+localizados. É o que pega arquivo de dados esquecido no `distribuidor.spec`, que os testes sobre o código-fonte não
+veem (foi o erro do `pedestrian_zone.json` na v0.1.5). O workflow "Executável Windows" roda esse teste antes de
+compactar o zip, então uma release com o pacote quebrado não chega a ser publicada.
+
 ## Formato de entrada
 
 Modelo atual (`;` ou `,` como separador, `.csv` ou `.xlsx`):
@@ -277,5 +285,5 @@ app/extract.py    leitura, modelos, IA       app/zones.py     zonas de Porto Ale
 app/templates.py  formatos salvos            app/matrix.py    tempos (estimativa / OSRM)
 app/geocode.py    endereço → coordenadas     app/links.py     links do Maps fragmentados
 app/jobs.py       estado em memória          app/main.py      API + páginas estáticas
-scripts/          amostras fictícias e teste ponta a ponta (e2e_api.py)
+scripts/          amostras fictícias, teste ponta a ponta (e2e_api.py) e teste de fumaça do executável (smoke_exe.py)
 ```
