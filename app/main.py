@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import jobs, pedestrian, templates, zonegroups, zonestore, zones
+from . import addrmemory, jobs, pedestrian, templates, zonegroups, zonestore, zones
 from .config import FALLBACK_DEPOT, RMPA_CITIES, SETTINGS
 from .extract import COLUMN_LABELS, NeedMapping, extract, llm_provider, to_query
 from .geocode import geocode_stops, in_metro, in_region, make_geocoder
@@ -300,7 +300,9 @@ def _ingest(job: jobs.Job, mapping: dict | None = None) -> None:
             raise ValueError(errs or "Nenhum endereço foi encontrado nos arquivos.")
         job.report = _combined_report(job)
         job.state, job.message = "geocodificando", "Localizando endereços no mapa"
-        geocode_stops(job.stops, lambda a, b: setattr(job, "progress", (a, b)))
+        n_mem = geocode_stops(job.stops, lambda a, b: setattr(job, "progress", (a, b)))
+        if n_mem:
+            job.report.notes.append(f"{n_mem} endereço{'s' if n_mem > 1 else ''} localizado{'s' if n_mem > 1 else ''} pela memória de endereços corrigidos.")
         job.state, job.message = "revisao", ""
     except Exception as exc:
         job.state, job.error = "erro", str(exc)
@@ -408,10 +410,33 @@ def patch_stop(job_id: str, stop_id: int, body: StopPatch):
         if not in_region(lat, lon):
             raise HTTPException(400, "Coordenadas fora de Porto Alegre.")
         stop.lat, stop.lon, stop.status, stop.precision, stop.reason = lat, lon, "ok", "manual", ""
+        addrmemory.remember(stop.src_query, lat, lon)
     elif body.address is not None:
         stop.address, stop.query, stop.status = body.address.strip(), to_query(body.address), "pendente"
         geocode_stops([stop])
+        if stop.status == "ok":
+            addrmemory.remember(stop.src_query, stop.lat, stop.lon)    # o texto ORIGINAL da lista passa a valer
     return stop.public()
+
+
+class MemoryIn(BaseModel):
+    enabled: bool
+
+
+@app.get("/api/enderecos")
+def addr_memory_status():
+    return {"enabled": addrmemory.enabled(), "count": addrmemory.count()}
+
+
+@app.put("/api/enderecos")
+def addr_memory_set(body: MemoryIn):
+    addrmemory.set_enabled(body.enabled)
+    return {"enabled": addrmemory.enabled(), "count": addrmemory.count()}
+
+
+@app.delete("/api/enderecos")
+def addr_memory_forget():
+    return {"forgotten": addrmemory.forget_all(), "enabled": addrmemory.enabled(), "count": addrmemory.count()}
 
 
 @app.post("/api/jobs/{job_id}/regeocode")

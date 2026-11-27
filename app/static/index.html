@@ -97,6 +97,12 @@
     <div id="s1status" class="status" role="status" hidden></div>
     <div id="s1report" hidden></div>
     <p id="s1ai" class="hint"></p>
+    <details class="how" id="addr-memory">
+      <summary><svg class="i"><use href="#i-info"/></svg> Lembrar endereços que eu corrigir <span id="mem-summary" class="muted"></span></summary>
+      <label class="check"><input type="checkbox" id="mem-on"> Lembrar neste computador os endereços que eu corrigir na revisão</label>
+      <p class="hint">Guarda só o texto do endereço e a posição, em <code>data/enderecos.json</code> (nenhum nome, CPF, telefone ou código). Nos próximos dias, o mesmo endereço sai localizado sozinho. Fica salvo mesmo depois de "Apagar dados da sessão"; desligado, nada é gravado.</p>
+      <div class="actions tight"><button type="button" class="ghost danger" id="mem-forget">Esquecer os endereços lembrados</button></div>
+    </details>
   </section>
 
   <section class="panel" id="map-card" hidden>

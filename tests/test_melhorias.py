@@ -95,3 +95,70 @@ def test_nao_move_de_ou_para_a_rota_a_pe():
     walk_stop = walker["stops"][0]["deliveries"][0]["id"]
     assert client.post(f"/api/jobs/{jid}/move", json={"stop": moto_stop, "to": walker["index"]}).status_code == 400
     assert client.post(f"/api/jobs/{jid}/move", json={"stop": walk_stop, "to": 0}).status_code == 400
+
+
+# ---- memória de endereços corrigidos (opcional)
+from test_multi_files import _csv, _send, _wait  # noqa: E402
+
+LISTA = _csv("Rua Inexistente, 123;Ana Lima;COD1", "Av. Ipiranga, 200;Beto;COD2")
+
+
+def _upload():
+    jid = _send(("l.csv", LISTA, "text/csv"))
+    return jid, _wait(jid)
+
+
+def test_memoria_desligada_por_padrao_nao_grava_nada():
+    from app import addrmemory
+
+    assert client.get("/api/enderecos").json() == {"enabled": False, "count": 0}
+    jid, j = _upload()
+    assert j["counts"] == {"ok": 1, "revisar": 1}
+    rev = client.get(f"/api/jobs/{jid}").json()["review"][0]
+    client.patch(f"/api/jobs/{jid}/stops/{rev['id']}", json={"coords": "-30.0346, -51.2177"})
+    assert not addrmemory.PATH.exists()                       # nada gravado
+    _, j2 = _upload()
+    assert j2["counts"] == {"ok": 1, "revisar": 1}            # e o endereço volta para a revisão
+
+
+def test_memoria_ligada_lembra_a_correcao_por_coordenadas_e_so_guarda_endereco_e_posicao():
+    from app import addrmemory
+
+    assert client.put("/api/enderecos", json={"enabled": True}).json() == {"enabled": True, "count": 0}
+    jid, j = _upload()
+    rev = client.get(f"/api/jobs/{jid}").json()["review"][0]
+    client.patch(f"/api/jobs/{jid}/stops/{rev['id']}", json={"coords": "-30.0346, -51.2177"})
+    assert client.get("/api/enderecos").json() == {"enabled": True, "count": 1}
+    raw = addrmemory.PATH.read_text(encoding="utf-8")
+    assert "Ana" not in raw and "COD1" not in raw and "Beto" not in raw       # nenhum nome nem código no arquivo
+    jid2, j2 = _upload()                                                       # outro dia, mesma lista
+    assert j2["counts"] == {"ok": 2}
+    assert any("memória de endereços" in n for n in j2["report"]["notes"])
+    st = next(s for s in client.get(f"/api/jobs/{jid2}/stops").json() if "Inexistente" in s["address"])
+    assert (st["status"], st["precision"], round(st["lat"], 4), round(st["lon"], 4)) == ("ok", "manual", -30.0346, -51.2177)
+
+
+def test_memoria_lembra_a_correcao_do_texto_pelo_endereco_original():
+    client.put("/api/enderecos", json={"enabled": True})
+    jid, _ = _upload()
+    rev = client.get(f"/api/jobs/{jid}").json()["review"][0]
+    r = client.patch(f"/api/jobs/{jid}/stops/{rev['id']}", json={"address": "Rua Existente, 123"})
+    assert r.json()["status"] == "ok"
+    _, j2 = _upload()
+    assert j2["counts"] == {"ok": 2}                          # a lista original (com o erro) já sai resolvida
+
+
+def test_memoria_esquecer_apaga_tudo_e_mantem_a_opcao():
+    client.put("/api/enderecos", json={"enabled": True})
+    jid, _ = _upload()
+    rev = client.get(f"/api/jobs/{jid}").json()["review"][0]
+    client.patch(f"/api/jobs/{jid}/stops/{rev['id']}", json={"coords": "-30.0346, -51.2177"})
+    assert client.delete("/api/enderecos").json() == {"forgotten": 1, "enabled": True, "count": 0}
+    _, j = _upload()
+    assert j["counts"] == {"ok": 1, "revisar": 1}
+
+
+def test_memoria_chave_ignora_acento_caixa_e_espacos():
+    from app import addrmemory
+
+    assert addrmemory.key("  Rua São  João, 12 ") == addrmemory.key("rua sao joao, 12")

@@ -179,6 +179,7 @@ async function init() {
     dlg.returnValue = "";
   });
   fabInit();
+  memInit();
   $("move-dialog").addEventListener("close", (e) => {
     const dlg = e.target, mv = dlg._move; dlg._move = null;
     if (dlg.returnValue === "go" && mv) commitMove(mv.pv, mv.marked);
@@ -1108,6 +1109,21 @@ async function commitMove(pv, marked) {
   [pv.from, pv.to].forEach((k) => document.querySelector(`.driver[data-i="${k}"] .dtoggle`)?.click());
   $("sent-last").textContent = `Parada movida de ${pv.from_label} para ${pv.to_label}. As duas rotas foram reordenadas${marked.length ? " e as marcas de envio delas foram desfeitas" : ""}.`;
   announce($("sent-last").textContent);
+}
+
+// ---- memória de endereços corrigidos (opcional): o servidor guarda só texto do endereço e posição
+async function memRefresh() {
+  try {
+    const m = await api("/api/enderecos");
+    $("mem-on").checked = m.enabled;
+    $("mem-summary").textContent = m.enabled ? `· ligada, ${m.count} endereço${m.count === 1 ? "" : "s"}` : "";
+    $("mem-forget").disabled = !m.count;
+  } catch { $("addr-memory").hidden = true; }
+}
+function memInit() {
+  $("mem-on").addEventListener("change", async () => { try { await api("/api/enderecos", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: $("mem-on").checked }) }); } catch {} memRefresh(); });
+  twoStep($("mem-forget"), "Confirmar: esquecer tudo", async () => { try { await api("/api/enderecos", { method: "DELETE" }); } catch {} memRefresh(); announce("Endereços lembrados apagados"); });
+  memRefresh();
 }
 
 // ---- fila de envio: quantos já receberam as duas mensagens e qual é a próxima
