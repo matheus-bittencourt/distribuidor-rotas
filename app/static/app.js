@@ -165,6 +165,7 @@ async function init() {
   $("copy-all-routes").addEventListener("click", (e) => copyAll("rota", e.currentTarget, "Todas as rotas copiadas"));
   $("copy-all-links").addEventListener("click", (e) => copyAll("links", e.currentTarget, "Todos os links copiados"));
   $("print-all").addEventListener("click", () => { $("bulk").open = false; printSheets(state.result.drivers, "Rotas do dia"); });
+  $("print-summary").addEventListener("click", () => { $("bulk").open = false; printNodes([summarySheet(state.result)], "Resumo do dia"); });
   $("copy-next").addEventListener("click", copyNext);
   twoStep($("wipe"), "Confirmar: apagar tudo", wipe);
   twoStep($("wipe-end"), "Confirmar: apagar tudo", wipe);
@@ -886,9 +887,35 @@ function sheetFor(d, r) {
     el("table", {}, el("thead", {}, el("tr", {}, ...["#", "Nome", "Endereço", "Rastreio", "Chega em", "Entregue"].map((h) => el("th", {}, h)))), ...bodies),
     el("p", { class: "foot" }, "Tempos e km são estimativas. “Chega em” conta desde a saída."));
 }
-function printSheets(list, title) {
+// Resumo do dia para quem gerencia: totais e uma linha por entregador. Sem nomes de clientes nem endereços.
+function summarySheet(r) {
+  const today = new Date().toLocaleDateString("pt-BR"), dr = r.drivers, all = dr.flatMap((d) => d.stops);
+  const free = dr.filter((d) => d.mode !== "pe" && !d.group);
+  const sum = (a) => a.reduce((x, y) => x + y, 0), approx = all.filter((s) => s.precision === "aproximado").length;
+  const fr = (a, f) => !a.length ? "–" : (Math.min(...a) === Math.max(...a) ? f(a[0]) : `${f(Math.min(...a))}–${f(Math.max(...a))}`);
+  const line = (k, v) => el("tr", {}, el("th", {}, k), el("td", {}, v));
+  return el("section", { class: "sheet" },
+    el("h1", {}, `Resumo do dia — ${today}`),
+    el("p", { class: "meta" }, `${dr.length} rotas · ${r.deliveries} entregas em ${sum(dr.map((d) => d.count))} paradas`),
+    el("table", { class: "kv" }, el("tbody", {},
+      line("Km somados", `${Math.round(sum(dr.map((d) => d.km)))} km`),
+      line("Tempo somado de todas as rotas", fmtMin(sum(dr.map((d) => d.total_min)))),
+      line("Rotas livres (equilíbrio)", `${free.length}: entregas ${fr(free.map((d) => d.deliveries), String)} · tempo ${fr(free.map((d) => d.total_min), fmtMin)} · km ${fr(free.map((d) => d.km), Math.round)}`),
+      ...(r.zones || []).map((z) => line(`Zona ${z.name}`, `${z.deliveries} entregas · ${z.drivers.length} entregador${z.drivers.length === 1 ? "" : "es"} · ${z.profile === "pe" ? "a pé" : "moto"}`)),
+      ...(dr.some((d) => d.mode === "pe" && !d.group) ? [line("Entregador a pé (Centro)", `${dr.find((d) => d.mode === "pe" && !d.group).deliveries} entregas`)] : []),
+      line("Posições aproximadas", `${approx} de ${all.length} paradas (só a rua foi localizada)`),
+      line("Entregas de fora das rotas", `${r.unrouted.length} para revisar`),
+      ...(r.manual_moves ? [line("Paradas movidas à mão", String(r.manual_moves))] : []),
+      line("Como foi calculado", `${r.matrix.startsWith("estimativa") ? "tempos e km estimados em linha reta" : "tempos e km pelas ruas"}${(r.traffic || 1) > 1 ? `, deslocamento com +${Math.round((r.traffic - 1) * 100)}% de trânsito` : ""} · folga de ${Math.round((r.tolerance_seconds ?? 0) / 60)} min por entrega`))),
+    el("table", {}, el("thead", {}, el("tr", {}, ...["Linha", "Entregador", "Zona", "Paradas", "Entregas", "Tempo", "Km"].map((h) => el("th", {}, h)))),
+      el("tbody", {}, ...dr.map((d) => el("tr", {}, el("td", { class: "c-n" }, String(d.index + 1)), el("td", {}, d.label),
+        el("td", {}, d.group || (d.mode === "pe" ? "A pé" : d.zones[0]?.name || "–")), el("td", {}, String(d.count)), el("td", {}, String(d.deliveries)), el("td", {}, fmtMin(d.total_min)), el("td", {}, `${Math.round(d.km)}`))))),
+    el("p", { class: "foot" }, "Tempos e km são estimativas, sem trânsito em tempo real. Este resumo não traz nomes nem endereços de clientes."));
+}
+function printSheets(list, title) { printNodes(list.map((d) => sheetFor(d, state.result)), title); }
+function printNodes(nodes, title) {
   const area = $("print-area"), oldTitle = document.title;
-  area.replaceChildren(...list.map((d) => sheetFor(d, state.result)));
+  area.replaceChildren(...nodes);
   document.title = title;
   const done = () => {
     area.replaceChildren(); document.title = oldTitle; window.removeEventListener("afterprint", done);

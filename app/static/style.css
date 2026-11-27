@@ -439,6 +439,7 @@ label.check.small { min-height: var(--tap); font-size: .8125rem; margin-left: au
 #print-area td.c-ok { width: 3.5rem; text-align: center; }
 #print-area .box { display: inline-block; width: 1rem; height: 1rem; border: 1.5px solid #000; border-radius: 2px; vertical-align: middle; }
 #print-area .foot { margin-top: .5rem; font-size: .75rem; }
+#print-area table.kv th { width: 16rem; background: #f5f6f8; }
 @media print {
   :root { color-scheme: light; }
   @page { size: A4; margin: 12mm; }

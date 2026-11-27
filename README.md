@@ -188,6 +188,13 @@ zona vai para ele; as demais seguem para as motos, como antes.
 Medido com os 1400 endereços de teste e 14 entregadores: 32 entregas em 22 paradas na zona, rota a pé de
 ~2h53 e ~7 km; as 14 motos ficaram com 95–101 entregas, 7h09–7h34 e 89–104 km. Cálculo completo em ~52 s.
 
+## Ajustar antes de enviar
+
+- **Mover uma parada para outro entregador.** Com uma rota aberta, cada parada de moto tem "Mover para…". O app reordena só as duas rotas (a de saída e a de chegada) e mostra, antes de aplicar, o que muda nos dois (entregas, tempo e km) e nas faixas das rotas livres. Se um dos dois já estava marcado como enviado, avisa que a marca será desfeita. Mover à mão quase sempre piora o equilíbrio: o resumo passa a dizer quantas paradas foram movidas. Não move de nem para a rota a pé. Todas as entregas do mesmo endereço vão juntas.
+- **Trânsito esperado** (em "Ajustes da divisão"): sem trânsito, moderado (+20%) ou pico (+40%) sobre o tempo de deslocamento das motos. O mapa não conhece o trânsito do dia; isso só faz os horários de chegada refletirem a hora da saída. Os km e as paradas não mudam, e a rota a pé não é afetada.
+- **Memória de endereços corrigidos** (opcional, desligada por padrão, em "Lembrar endereços que eu corrigir" na etapa 1). Ligada, cada endereço que você corrige na revisão (colando coordenadas ou ajustando o texto até o mapa achar) fica em `data/enderecos.json`, ao lado do executável, **só com o texto do endereço e a posição**: nenhum nome, CPF, telefone ou código. No dia seguinte, o mesmo endereço (sem diferença de acento, caixa ou espaços) sai localizado sozinho, e o relatório diz quantos vieram da memória. "Esquecer" apaga tudo. Fica salva mesmo depois de "Apagar dados da sessão", porque é uma escolha sua.
+- **Resumo do dia** (menu "Todas as rotas" › "Imprimir resumo do dia"): uma folha para quem gerencia, com km e tempo somados, faixas das rotas livres, uma linha por zona, quantas posições são aproximadas e quantas entregas ficaram fora, e uma tabela com uma linha por entregador. Não traz nomes nem endereços de clientes.
+
 ## Envio das mensagens
 
 A fila de envio marca cada entregador como **enviado** quando você copia (ou abre o WhatsApp). Se o navegador bloquear a cópia (por exemplo, o app aberto por IP na rede), o texto vai para um diálogo: cole, envie e toque em **Já colei e enviei** para marcar; fechar de outro jeito não marca nada. No menu **Mais** de cada entregador há **Marcar como enviado, sem copiar** (e **Desmarcar envio**), para quem já mandou por outro meio ou para pular quem não responde. Quando todos estão enviados a barra mostra **Tudo enviado**. No celular, o botão da próxima mensagem fica fixo na base enquanto a fila sai da tela.
