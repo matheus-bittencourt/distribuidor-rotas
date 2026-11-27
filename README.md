@@ -180,6 +180,12 @@ zona vai para ele; as demais seguem para as motos, como antes.
 Medido com os 1400 endereços de teste e 14 entregadores: 32 entregas em 22 paradas na zona, rota a pé de
 ~2h53 e ~7 km; as 14 motos ficaram com 95–101 entregas, 7h09–7h34 e 89–104 km. Cálculo completo em ~52 s.
 
+## Envio das mensagens
+
+A fila de envio marca cada entregador como **enviado** quando você copia (ou abre o WhatsApp). Se o navegador bloquear a cópia (por exemplo, o app aberto por IP na rede), o texto vai para um diálogo: cole, envie e toque em **Já colei e enviei** para marcar; fechar de outro jeito não marca nada. No menu **Mais** de cada entregador há **Marcar como enviado, sem copiar** (e **Desmarcar envio**), para quem já mandou por outro meio ou para pular quem não responde. Quando todos estão enviados a barra mostra **Tudo enviado**. No celular, o botão da próxima mensagem fica fixo na base enquanto a fila sai da tela.
+
+**Apagar** e **Recalcular** pedem um segundo toque deliberado: ele só vale depois de 0,6 s (dois toques seguidos não confirmam) e o botão volta ao normal sozinho em 6 s (8 s no Recalcular, que também diz quantos entregadores já receberam a rota atual). No celular o mapa das rotas fica recolhido atrás de "Ver o mapa das rotas" e um dedo sobre o mapa não prende mais a rolagem ("Mover o mapa com um dedo" liga o arrastar; dois dedos dão zoom).
+
 ## Zonas por entregador
 
 Opcional. Em **Zonas por entregador** (etapa dos entregadores) dá para desenhar áreas no mapa e escolher quem atende em cada uma. As entregas dentro de uma zona vão só para os entregadores dela, que as dividem entre si; as de fora vão para os entregadores que ficaram sem zona. Sem zonas, nada muda.
@@ -189,8 +195,8 @@ Opcional. Em **Zonas por entregador** (etapa dos entregadores) dá para desenhar
 - **Salvas:** ficam em `data/zonas.json`, ao lado do executável (no pen drive, acompanham a pasta), e voltam sozinhas ao abrir o app, em qualquer porta ou navegador. O arquivo guarda contorno, nome, forma de atendimento e os **nomes dos entregadores** escolhidos para cada zona; nenhum dado de entrega. Para levar as zonas a outro computador, copie esse arquivo. Zonas feitas na versão anterior (só no navegador) são migradas para o arquivo na primeira abertura.
 - **Como atende:** *moto* sai do ponto padrão (ou da casa do entregador) e volta ao ponto de chegada; *a pé* usa rota de pedestre e sai e volta a um ponto só (campo opcional; sem ele, a parada mais central da zona). Vários entregadores a pé na mesma zona saem do mesmo ponto.
 - **Precedência:** 1) a zona a pé do Centro (fixa) vence sempre: entrega dentro dela vai para o entregador a pé, mesmo que também caia numa zona desenhada (a tela avisa quantas); 2) depois, as zonas na ordem da lista (parada em duas zonas fica com a primeira, com aviso); 3) o resto, para os livres.
-- **Um entregador só em uma zona** e ao menos um por zona. Se sobrar entrega fora das zonas e nenhum entregador livre, o cálculo para com uma mensagem clara.
-- **Equilíbrio:** cada zona equilibra só entre os entregadores dela. O veredito e as faixas da tela comparam apenas os livres; cada zona tem sua linha no resumo e um aviso quando a carga fica bem acima da dos livres (ex.: 410 entregas para 2 entregadores). A sugestão é ajustar a quantidade de entregadores nela.
+- **Um entregador só em uma zona** e ao menos um por zona. Quem atende aparece como chips (toque para tirar) e se adiciona pela lista "Adicionar entregador…"; quem já está em outra zona não aparece nela. Enquanto houver zona sem entregador, **Calcular rotas fica bloqueado** e a tela diz qual zona falta. Se sobrar entrega fora das zonas e nenhum entregador livre, o cálculo para com uma mensagem clara.
+- **Equilíbrio:** cada zona equilibra só entre os entregadores dela. O título do resumo diz quantas rotas são livres, de zona e a pé (ex.: "15 rotas prontas (12 livres + 2 de zona + 1 a pé)"), as faixas e o veredito valem só para as livres, e as de zona e a pé aparecem numa lista à parte, com as placas de linha delas e barras hachuradas (fora do equilíbrio). Os avisos (carga bem acima da dos livres, paradas na zona a pé, sobreposição) ficam num bloco recolhível quando são vários.
 - **Faixa de borda (Avançado):** por zona, em metros (padrão 0). Como o endereço é a rua, uma entrega pode cair do outro lado da linha; o resumo mostra quantas paradas ficam a até 80 m do contorno para conferir.
 - **Tempo de cálculo:** cada zona roda o solver à parte (pequena: poucos segundos). Medido com 1400 entregas, 14 entregadores, uma zona de moto com 2 e uma a pé com 1: ~40 s, contra ~35 s sem zonas.
 

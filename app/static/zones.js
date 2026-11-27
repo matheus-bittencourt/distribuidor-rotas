@@ -55,7 +55,7 @@ function zInside(p, poly, edgeM = 0) {
 function zEnsureMap() {
   if (Z.map) return;
   Z.map = L.map("zmap", { preferCanvas: true, maxZoom: 18, doubleClickZoom: false });
-  addBasemap(Z.map);
+  addBasemap(Z.map); touchGuard(Z.map, $("zmap"));
   Z.map.setView([-30.03, -51.2], 11);
   const bp = state.cfg.pedestrian_polygon;
   if (bp && bp.length) Z.builtin = L.polygon(bp, { color: "#7c3aed", weight: 2, dashArray: "6 6", fillOpacity: 0.06, interactive: false })
@@ -182,16 +182,27 @@ function zRenderList() {
     start.addEventListener("input", () => { z.start = start.value; zSave(); });
     const edge = el("input", { type: "number", id: `${id}-edge`, min: "0", max: "500", step: "10", value: String(z.edge || 0) });
     edge.addEventListener("input", () => { z.edge = Math.max(0, Math.min(500, parseFloat(edge.value) || 0)); zSave(); zFillInfo(); });
+    // quem atende: chips dos escolhidos (tocar tira) e uma lista para adicionar, em vez de uma caixa por entregador
     const who = el("fieldset", { class: "zwho" }, el("legend", {}, "Quem atende nesta zona"));
+    const chosen = z.labels.filter((l) => names.includes(l));
+    const free = names.filter((nm) => zTaken(nm, i) < 0 && !z.labels.includes(nm));
     if (!names.length) who.append(el("p", { class: "hint" }, "Cadastre os entregadores acima para escolher."));
-    names.forEach((label, k) => {
-      const other = zTaken(label, i);
-      const cb = el("input", { type: "checkbox", value: label, ...(z.labels.includes(label) ? { checked: "" } : {}), ...(other >= 0 ? { disabled: "" } : {}) });
-      cb.addEventListener("change", () => {
-        z.labels = cb.checked ? [...z.labels, label] : z.labels.filter((l) => l !== label); zSave(); zRender();
+    else {
+      who.append(el("div", { class: "zchips" }, ...chosen.map((label) => {
+        const chip = el("button", { type: "button", class: "zchip", "aria-label": `Tirar ${label} desta zona` }, label, " ×");
+        chip.addEventListener("click", () => { z.labels = z.labels.filter((l) => l !== label); zSave(); zRender(); });
+        return chip;
+      })));
+      const add = el("select", { id: `${id}-add`, "aria-label": `Adicionar entregador a ${z.name || `zona ${i + 1}`}` },
+        el("option", { value: "" }, free.length ? "Adicionar entregador…" : "Nenhum entregador livre"), ...free.map((nm) => el("option", { value: nm }, nm)));
+      add.disabled = !free.length;
+      add.addEventListener("change", () => {
+        if (!add.value) return;
+        z.labels = [...z.labels, add.value]; zSave(); zRender();
+        document.getElementById(`${id}-add`)?.focus();
       });
-      who.append(el("label", { class: "check zpick" }, cb, el("span", {}, label, other >= 0 ? el("span", { class: "muted" }, ` · já em ${Z.list[other].name || `Zona ${other + 1}`}`) : "")));
-    });
+      who.append(add, el("p", { class: "hint" }, "Quem já está em outra zona não aparece na lista."));
+    }
     const missing = z.labels.filter((l) => !names.includes(l));
     if (missing.length) who.append(el("p", { class: "hint warnline" }, `Fora da lista de entregadores: ${missing.join(", ")}. Não serão usados.`));
     const info = el("p", { class: "zinfo hint", id: `${id}-info`, role: "status" });
@@ -229,9 +240,15 @@ function zFillInfo() {
     info.classList.toggle("warnline", !z.labels.length);
   });
 }
+// Zonas sem nenhum entregador (da lista atual): enquanto houver, o cálculo fica bloqueado e a tela diz qual é.
+function zonesIncomplete() {
+  const names = parseDrivers().map((d) => d.label);
+  return Z.list.filter((zz) => !zz.labels.some((l) => names.includes(l))).map((zz) => zz.name.trim() || "sem nome");
+}
 function zSummary() {
   const n = Z.list.length, k = new Set(Z.list.flatMap((z) => z.labels)).size;
   $("zones-summary").textContent = n ? `${n} zona${n > 1 ? "s" : ""} · ${k} entregador${k === 1 ? "" : "es"} nelas` : "nenhuma";
+  if (typeof updatePlan === "function" && state.cfg) updatePlan();
 }
 function zRender() { if (Z.map) zDrawPolygons(); zRenderList(); if (!Z.draft) zSetMode(false); }
 
